@@ -22,5 +22,5 @@ common_args="--device cuda --wandb_project cs336 \
 submit() {
   local gpu="$1" run_name="$2"
   shift 2
-  uv run modal run --detach modal_app.py::main --dataset owt-32k --gpu "$gpu" --run-name "$run_name" --args "$common_args $* $extra_args"
+  GPU="$gpu" uv run modal run --detach modal_app.py::main --dataset owt-32k --run-name "$run_name" --args "$common_args $* $extra_args"
 }

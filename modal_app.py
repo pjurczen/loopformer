@@ -1,19 +1,23 @@
 """Runs train.py and then evaluate.py on a Modal GPU. Run from inside loopformer/:
 
-    uv run modal run --detach modal_app.py::main --dataset owt-32k --gpu A100-80GB --run-name <run_name> --args "<train.py flags>"
-    uv run modal run --detach modal_app.py::reevaluate --run-name <run_name> --gpu A100-80GB
+    GPU=B200 uv run modal run --detach modal_app.py::main --dataset owt-32k --run-name <run_name> --args "<train.py flags>"
+    GPU=A100-80GB uv run modal run --detach modal_app.py::reevaluate --run-name <run_name>
     uv run modal run modal_app.py::check     # builds the image and prints the torch build, without a GPU
 
-Data and tokenizers live in the Modal volume cs336-data (data/<dataset>/, tokenizers/<name>/), uploaded once with
-`modal volume put`. Finished runs are saved there under runs/<run_name>/, with budget_eval.json from the per-loop
-evaluation; fetch them with `uv run modal volume get cs336-data runs/<run_name> runs/`. --detach keeps a run going if
-this terminal closes. The configs/ scripts hold the flags of the experiment's runs.
+The GPU type comes from the GPU environment variable (A100-80GB, B200, B200+ for B200-or-B300 at the B200 price) and
+is fixed before the app is built, so Modal's dashboard shows the GPU a run uses. Data and tokenizers live in the Modal
+volume cs336-data (data/<dataset>/, tokenizers/<name>/), uploaded once with `modal volume put`. Finished runs are saved
+there under runs/<run_name>/, with budget_eval.json from the per-loop evaluation; fetch them with
+`uv run modal volume get cs336-data runs/<run_name> runs/`. --detach keeps a run going if this terminal closes. The
+configs/ scripts hold the flags of the experiment's runs.
 
-Only modal is imported at the top: everything else runs remotely in the image.
+Only modal and os are imported at the top: everything else runs remotely in the image.
 """
+import os
+
 import modal
 
-DEFAULT_GPU = "A100-80GB"
+GPU = os.environ.get("GPU", "A100-80GB")
 TIMEOUT_MINUTES = 75  # hard stop: a 45-minute run plus its per-loop evaluation
 PROJECT_DIR = "/root/project"
 VOLUME_DIR = "/vol"
@@ -31,10 +35,8 @@ volume = modal.Volume.from_name("cs336-data", create_if_missing=True)
 app = modal.App("loopformer", image=image)
 
 
-@app.function(gpu=DEFAULT_GPU, timeout=TIMEOUT_MINUTES * 60, volumes={VOLUME_DIR: volume}, secrets=[modal.Secret.from_name("wandb")])
+@app.function(gpu=GPU, timeout=TIMEOUT_MINUTES * 60, volumes={VOLUME_DIR: volume}, secrets=[modal.Secret.from_name("wandb")])
 def train(dataset: str, run_name: str, args: list[str], git_commit: str):
-    import os
-
     os.chdir(PROJECT_DIR)
     copy_inputs(dataset)
     print_gpu()
@@ -45,11 +47,9 @@ def train(dataset: str, run_name: str, args: list[str], git_commit: str):
         save_runs()  # whatever the run produced, also when it failed
 
 
-@app.function(gpu=DEFAULT_GPU, timeout=TIMEOUT_MINUTES * 60, volumes={VOLUME_DIR: volume})
+@app.function(gpu=GPU, timeout=TIMEOUT_MINUTES * 60, volumes={VOLUME_DIR: volume})
 def evaluate_run(dataset: str, run_name: str):
     """The per-loop evaluation on its own, for a run already on the volume."""
-    import os
-
     os.chdir(PROJECT_DIR)
     copy_inputs(dataset)
     print_gpu()
@@ -62,7 +62,6 @@ def evaluate_run(dataset: str, run_name: str):
 
 @app.function(timeout=10 * 60)
 def check():
-    import os
     import sys
 
     import torch
@@ -73,8 +72,6 @@ def check():
 
 
 def run_dir(run_name: str) -> str:
-    import os
-
     return os.path.join(RUNS_DIR, run_name)  # train.py's rule: <runs_dir>/<run_name>
 
 
@@ -91,14 +88,12 @@ def copy_inputs(dataset: str):
 
 
 def copy_run(run_name: str):
-    import os
     import shutil
 
     shutil.copytree(os.path.join(VOLUME_DIR, run_dir(run_name)), run_dir(run_name))
 
 
 def save_runs():
-    import os
     import shutil
 
     if os.path.isdir(RUNS_DIR):
@@ -122,15 +117,14 @@ def run_script(script: str, *args: str, env: dict | None = None):
 
 
 @app.local_entrypoint()
-def main(dataset: str, run_name: str, args: str, gpu: str = DEFAULT_GPU):
-    """--gpu picks the GPU type (A100-80GB, B200, B200+ for B200-or-B300 at the B200 price)."""
+def main(dataset: str, run_name: str, args: str):
     import shlex
 
     from version import git_commit  # runs locally, where Git is available; the run records the version
 
-    train.with_options(gpu=gpu).remote(dataset, run_name, shlex.split(args), git_commit() or "unknown")
+    train.remote(dataset, run_name, shlex.split(args), git_commit() or "unknown")
 
 
 @app.local_entrypoint()
-def reevaluate(run_name: str, dataset: str = "owt-32k", gpu: str = DEFAULT_GPU):
-    evaluate_run.with_options(gpu=gpu).remote(dataset, run_name)
+def reevaluate(run_name: str, dataset: str = "owt-32k"):
+    evaluate_run.remote(dataset, run_name)
