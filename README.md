@@ -81,4 +81,15 @@ The per-loop evaluation of one run takes 10 to 12 minutes on the A100: the full 
 
 ### Phase 2: 45 minutes on a B200
 
-Pending.
+The best phase-1 shape, 6×2, for the leaderboard budget. The plain model's batch 256 does not fit: phase 1 peaked at 46 GB at batch 64, which scales to about the B200's whole 180 GB. So batch 192 with the learning rate √-scaled from 4e-3 at batch 64, 6.9e-3 decaying to 6.9e-4, warmup 500 steps, and a reserve of 2 minutes for the final validation.
+
+| Model | Unique weights | Steps | Tokens seen | ms per step | Peak memory | Loss |
+|---|---|---|---|---|---|---|
+| plain 12L/768 + QK-norm, batch 256, lr 8e-3 | 85M | 9,233 | 1.21B | 275 | 145 GB | **3.191** |
+| LoopFormer 6×2, batch 192, lr 6.9e-3 | 58M | 7,586 | 746M | 339 | 137 GB | 3.346 |
+
+At one loop the same model gives 3.414, at two loops 3.346.
+
+- **The gap is 0.155, the same as on the A100** (0.14 at 15 minutes): more training did not close it. The looped model also saw 62% of the plain model's tokens, from the smaller batch and the two-route step.
+- **At equal wall-clock** (step 1,000, about 340 s into each run) the looped model was at 3.947 against 3.776, with 500 of its steps in warmup against 120.
+- **Stability:** a first attempt with the phase-1 warmup of 120 steps spiked right after warmup (loss 4.98 → 7.33 at step 300) and recovered by step 1,000; it was stopped and restarted with warmup 500. The restart showed short gradient bursts (norm up to 1.5) as the rate climbed past 6e-3, each contained by clipping at 1.0, and nothing after warmup. The plain model at 8e-3 sat at norms of 0.07–0.14 throughout. The shared block receives gradient from every loop, so the looped model is closer to its stability edge at the same rate, which matches the paper's remark that looped models need a long warmup.
