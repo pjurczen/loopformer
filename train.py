@@ -23,6 +23,7 @@ from data import cross_entropy, get_batch, get_nonoverlapping_indices, get_rando
 from evaluate import validation_loss
 from model import CONDITIONINGS, LoopFormerLM
 from optim import AdamWOptimizer, MuonOptimizer, cosine_lr_schedule, cosine_lr_schedule_by_time, gradient_clipping
+from profiling import dump_and_summarize, start_recording
 from run import CHECKPOINTS_DIR, CONFIG_FILE, METRICS_FILE, LossConfig, RunConfig
 from tokenizer import read_tokenizer_config
 from trajectory import MIN_LOOP_MAX, long_trajectory, sample_short_trajectory
@@ -44,7 +45,7 @@ def training(args: argparse.Namespace):
     wandb_run = wandb.init(project=args.wandb_project, name=args.run_name, config=vars(args)) if args.wandb_project else None
 
     model = LoopFormerLM(run.architecture(), device=args.device, dtype=torch.float32)
-    model.compile_for_device(args.device)
+    model.compile_for_device(args.device, scope=args.compile)
     loss_config = run.loss()
 
     # With --optimizer_muon, the 2-D matrices inside the blocks go to Muon; everything else stays on AdamW.
@@ -97,7 +98,12 @@ def training(args: argparse.Namespace):
             indices = get_random_indices(dataset=train_dataset, batch_size=args.batch_size, context_length=args.model_context_length)
             inputs, targets = get_batch(dataset=train_dataset, indices=indices, context_length=args.model_context_length, device=args.device,
                                         dtype=torch.long)
+            snapshot_now = args.memory_snapshot_step == it and args.device.startswith("cuda")
+            if snapshot_now:
+                start_recording()
             losses = training_step(model, inputs, targets, loss_config, device=args.device, bf16=args.bf16)
+            if snapshot_now:
+                dump_and_summarize(run_dir)
 
             l2_norm: torch.Tensor = gradient_clipping(parameters=model.parameters(), max_l2_norm=args.gradient_max_l2_norm, eps=args.gradient_eps)
 
@@ -241,6 +247,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     arg_parser.add_argument("--checkpoint_src", type=str, default=None)
     arg_parser.add_argument("--wandb_project", type=str, default=None)
     arg_parser.add_argument("--bf16", action="store_true")
+    arg_parser.add_argument("--compile", choices=("blocks", "whole"), default="blocks",
+                            help="torch.compile each block on its own, or the whole forward pass (one graph per schedule)")
+    arg_parser.add_argument("--memory_snapshot_step", type=int, default=None,
+                            help="record every allocation of this training step and write memory_snapshot.pickle into the run folder (CUDA only)")
     arg_parser.add_argument("--time_budget_minutes", type=float, default=None,
                             help="train for this long instead of --iter steps (--iter becomes an upper limit); needs --optimizer_warmup_iters")
     arg_parser.add_argument("--time_reserve_minutes", type=float, default=0.0,

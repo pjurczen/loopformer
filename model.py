@@ -362,18 +362,31 @@ class LoopFormerLM(torch.nn.Module):
                 block.attach_lora(config.loop_lora_rank, config.loop_max, device=device, dtype=dtype)
         self.ln_final = RMSNorm(config.d_model, config.eps, device=device, dtype=dtype)
         self._block_calls: list | None = None
+        self._forward_call = None
 
-    def compile_for_device(self, device: str) -> None:
-        """Compiles each block on its own, not the whole model: a trajectory of any length then reuses the one compiled
-        block, and checkpoints keep the plain modules' keys. On CUDA the inductor backend generates fused kernels and
-        float32 matmuls may use TF32 tensor cores; elsewhere aot_eager works (MPS, CPU)."""
+    def compile_for_device(self, device: str, scope: str = "blocks") -> None:
+        """Compiles the model for training. On CUDA the inductor backend generates fused kernels and float32 matmuls
+        may use TF32 tensor cores; elsewhere aot_eager works (MPS, CPU). Checkpoints keep the plain modules' keys.
+
+        scope "blocks" compiles each block on its own: a trajectory of any length reuses the one compiled block.
+        scope "whole" compiles the whole forward pass, one graph per distinct schedule, which lets the compiler
+        decide across blocks what to save for the backward pass and what to recompute."""
         if device.startswith("cuda"):
             torch.set_float32_matmul_precision("high")
         backend = "inductor" if device.startswith("cuda") else "aot_eager"
-        self._block_calls = [torch.compile(block, backend=backend) for block in self.blocks]
+        if scope == "whole":
+            torch._dynamo.config.cache_size_limit = 64  # the schedules seen in training: the long one and the sampled short ones
+            self._forward_call = torch.compile(self._forward, backend=backend)
+        elif scope == "blocks":
+            self._block_calls = [torch.compile(block, backend=backend) for block in self.blocks]
+        else:
+            raise ValueError(f"scope must be 'blocks' or 'whole', got {scope!r}")
 
     def forward(self, tokens: torch.Tensor, schedule: list[float]) -> tuple[torch.Tensor, torch.Tensor]:
         """Returns the logits and the hidden state after the final norm, (batch, seq_len, vocab) and (batch, seq_len, d_model)."""
+        return (self._forward_call or self._forward)(tokens, schedule)
+
+    def _forward(self, tokens: torch.Tensor, schedule: list[float]) -> tuple[torch.Tensor, torch.Tensor]:
         x = self.token_embeddings(tokens)
         device = x.device
         t = torch.zeros((), device=device)

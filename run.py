@@ -68,6 +68,8 @@ class RunConfig(BaseModel):
     checkpoint_src: str | None
     wandb_project: str | None
     bf16: bool
+    compile: str = "blocks"  # older runs' config.json predates this field; they compiled per block
+    memory_snapshot_step: int | None = None
     git_commit: str | None  # code version the run was trained with; "-dirty" means uncommitted changes
     time_budget_minutes: float | None  # with a budget, training ended on time rather than at iter
     time_reserve_minutes: float
