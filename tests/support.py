@@ -1,7 +1,11 @@
 """Creation and action helpers shared by the tests: a tiny model that trains on the CPU in seconds."""
+import json
+import os
+
 import torch
 
 from model import LoopFormerLM, ModelConfig
+from run import METRICS_FILE
 from trajectory import long_trajectory
 
 VOCAB_SIZE = 100
@@ -18,6 +22,11 @@ def tiny_model(seed: int = 0) -> LoopFormerLM:
 def random_tokens(seed: int = 0, batch_size: int = 2) -> torch.Tensor:
     generator = torch.Generator().manual_seed(seed)
     return torch.randint(0, VOCAB_SIZE, (batch_size, CONTEXT_LENGTH), generator=generator)
+
+
+def read_metrics(run_dir) -> list[dict]:
+    with open(os.path.join(run_dir, METRICS_FILE)) as f:
+        return [json.loads(line) for line in f]
 
 
 def next_token_loss(model: LoopFormerLM, tokens: torch.Tensor, schedule: list[float]) -> torch.Tensor:

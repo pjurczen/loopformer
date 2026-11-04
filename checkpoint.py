@@ -1,5 +1,5 @@
-"""Checkpoints: the model's weights, the optimizer states and the step count. Every checkpoint here is saved from the
-plain model (never from a torch.compile wrapper), so the keys need no conversion on load."""
+"""Checkpoint files: the model's weights, the optimizer states and the step count. Every checkpoint here is saved from
+the plain model (never from a torch.compile wrapper), so the keys need no conversion on load."""
 import os
 from typing import IO, BinaryIO
 
@@ -52,10 +52,3 @@ def _load_into_model(src, model: torch.nn.Module) -> dict:
     checkpoint: dict = torch.load(src, map_location=next(model.parameters()).device)
     model.load_state_dict(checkpoint["model"])
     return checkpoint
-
-
-def latest_checkpoint_path(checkpoints_dir: str | os.PathLike) -> str:
-    checkpoints = [os.path.join(checkpoints_dir, name) for name in os.listdir(checkpoints_dir) if name.endswith(".pt")]
-    if not checkpoints:
-        raise FileNotFoundError(f"No checkpoints in {checkpoints_dir}")
-    return max(checkpoints, key=os.path.getmtime)

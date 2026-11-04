@@ -20,10 +20,11 @@ import torch
 import wandb
 
 from checkpoint import load_checkpoint, save_checkpoint
-from config import LossConfig, RunConfig
 from data import cross_entropy, get_batch, get_nonoverlapping_indices, get_random_indices
+from evaluate import validation_loss
 from model import LoopFormerLM
 from optim import AdamWOptimizer, MuonOptimizer, cosine_lr_schedule, cosine_lr_schedule_by_time, gradient_clipping
+from run import CHECKPOINTS_DIR, CONFIG_FILE, METRICS_FILE, LossConfig, RunConfig
 from tokenizer import read_tokenizer_config
 from trajectory import MIN_LOOP_MAX, long_trajectory, sample_short_trajectory
 
@@ -33,9 +34,9 @@ def training(args: argparse.Namespace):
     run = RunConfig.model_validate(vars(args))
 
     run_dir = os.path.join(args.runs_dir, args.run_name)
-    checkpoints_dir = os.path.join(run_dir, "checkpoints")
+    checkpoints_dir = os.path.join(run_dir, CHECKPOINTS_DIR)
     os.makedirs(checkpoints_dir, exist_ok=True)
-    with open(os.path.join(run_dir, "config.json"), "w") as f:
+    with open(os.path.join(run_dir, CONFIG_FILE), "w") as f:
         json.dump(vars(args), f, indent=2)
     print(f"Run directory: {run_dir}")
 
@@ -43,12 +44,8 @@ def training(args: argparse.Namespace):
     wandb_run = wandb.init(project=args.wandb_project, name=args.run_name, config=vars(args)) if args.wandb_project else None
 
     model = LoopFormerLM(run.architecture(), device=args.device, dtype=torch.float32)
+    model.compile_for_device(args.device)
     loss_config = run.loss()
-    if args.device.startswith("cuda"):
-        # Let float32 matmuls run on TF32 tensor cores (A100 and newer).
-        torch.set_float32_matmul_precision("high")
-    # aot_eager works on MPS and the CPU; on CUDA the default inductor backend generates fused kernels.
-    model.compile_blocks(backend="inductor" if args.device.startswith("cuda") else "aot_eager")
 
     # With --optimizer_muon, the 2-D matrices inside the blocks go to Muon; everything else stays on AdamW.
     muon_params = model.muon_parameters() if args.optimizer_muon else []
@@ -82,7 +79,7 @@ def training(args: argparse.Namespace):
     final_val_indices: npt.NDArray = get_nonoverlapping_indices(val_dataset, args.model_context_length) if args.val_data else None
     full_route = long_trajectory(args.loop_max)
 
-    with open(os.path.join(run_dir, "metrics.jsonl"), "a") as metric_file:
+    with open(os.path.join(run_dir, METRICS_FILE), "a") as metric_file:
 
         t0 = time.perf_counter()
         if elapsed_time is not None:
@@ -179,33 +176,6 @@ def training_step(model: LoopFormerLM, inputs: torch.Tensor, targets: torch.Tens
     (loss.shortcut_weight * short_loss + loss.consistency_weight * consistency_loss).backward()
 
     return {"train_loss": train_loss.detach(), "short_loss": short_loss.detach(), "consistency_loss": consistency_loss.detach()}
-
-
-def validation_loss(model: LoopFormerLM, dataset: npt.NDArray, indices: npt.NDArray, batch_size: int, context_length: int,
-                    device: str, schedule: list[float], bf16: bool = False, full_dataset_eval: bool = False) -> float:
-    """The mean cross-entropy per token over the windows at `indices`, run along `schedule`. With full_dataset_eval the
-    tail of the dataset that does not fill a window counts too."""
-    with torch.no_grad(), torch.autocast(device_type=device, dtype=torch.bfloat16, enabled=bf16):
-        val_loss_sum: float = 0
-        token_count: int = 0
-        for idx in range(0, len(indices), batch_size):
-            batch = indices[idx: (idx + batch_size)]
-            val_inputs, val_targets = get_batch(dataset=dataset, indices=batch, context_length=context_length, device=device, dtype=torch.long)
-            val_prediction, _ = model(val_inputs, schedule)
-            val_loss_sum += cross_entropy(val_prediction.float(), val_targets).item() * (len(batch) * context_length)
-            token_count += len(batch) * context_length
-
-        if full_dataset_eval:
-            tail_length: int = (len(dataset) - 1) % context_length
-            if tail_length > 0:
-                start = len(dataset) - 1 - tail_length
-                val_inputs, val_targets = get_batch(dataset=dataset, indices=np.array([start]), context_length=tail_length, device=device,
-                                                    dtype=torch.long)
-                val_prediction, _ = model(val_inputs, schedule)
-                val_loss_sum += cross_entropy(val_prediction.float(), val_targets).item() * tail_length
-                token_count += tail_length
-
-        return val_loss_sum / token_count
 
 
 def record_metrics(metric_file, wandb_run, metrics: dict):

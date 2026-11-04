@@ -255,9 +255,13 @@ class LoopFormerLM(torch.nn.Module):
         self.ln_final = RMSNorm(config.d_model, config.eps, device=device, dtype=dtype)
         self._block_calls: list | None = None
 
-    def compile_blocks(self, backend: str) -> None:
+    def compile_for_device(self, device: str) -> None:
         """Compiles each block on its own, not the whole model: a trajectory of any length then reuses the one compiled
-        block, and checkpoints keep the plain modules' keys."""
+        block, and checkpoints keep the plain modules' keys. On CUDA the inductor backend generates fused kernels and
+        float32 matmuls may use TF32 tensor cores; elsewhere aot_eager works (MPS, CPU)."""
+        if device.startswith("cuda"):
+            torch.set_float32_matmul_precision("high")
+        backend = "inductor" if device.startswith("cuda") else "aot_eager"
         self._block_calls = [torch.compile(block, backend=backend) for block in self.blocks]
 
     def forward(self, tokens: torch.Tensor, schedule: list[float]) -> tuple[torch.Tensor, torch.Tensor]:

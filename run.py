@@ -1,11 +1,24 @@
-"""A run's settings, as train.py records them in config.json, and the translations other scripts need from them."""
+"""A run folder: the settings train.py writes to config.json, their translations, and the trained model it holds.
+
+    runs/<run_name>/config.json        the settings (RunConfig)
+    runs/<run_name>/metrics.jsonl      one JSON row per log step and per validation
+    runs/<run_name>/checkpoints/       ckpt_<step>.pt
+    runs/<run_name>/budget_eval.json   the per-loop evaluation, once evaluate.py ran
+"""
 import json
 import os
 from dataclasses import dataclass
 
+import torch
 from pydantic import BaseModel
 
-from model import ModelConfig
+from checkpoint import load_model
+from model import LoopFormerLM, ModelConfig
+
+CONFIG_FILE = "config.json"
+METRICS_FILE = "metrics.jsonl"
+CHECKPOINTS_DIR = "checkpoints"
+BUDGET_EVAL_FILE = "budget_eval.json"
 
 
 @dataclass(frozen=True)
@@ -74,5 +87,23 @@ class RunConfig(BaseModel):
 
 
 def load_run_config(run_dir: str | os.PathLike) -> RunConfig:
-    with open(os.path.join(run_dir, "config.json")) as f:
+    with open(os.path.join(run_dir, CONFIG_FILE)) as f:
         return RunConfig.model_validate(json.load(f))
+
+
+def latest_checkpoint_path(run_dir: str | os.PathLike) -> str:
+    checkpoints_dir = os.path.join(run_dir, CHECKPOINTS_DIR)
+    checkpoints = [os.path.join(checkpoints_dir, name) for name in os.listdir(checkpoints_dir) if name.endswith(".pt")]
+    if not checkpoints:
+        raise FileNotFoundError(f"No checkpoints in {checkpoints_dir}")
+    return max(checkpoints, key=os.path.getmtime)
+
+
+def load_trained_model(run_dir: str | os.PathLike, device: str, checkpoint_path: str | None = None) -> tuple[LoopFormerLM, RunConfig]:
+    """The model of a finished run, built from its config.json and loaded from its newest checkpoint (or the given one),
+    in eval mode, with the run's settings."""
+    run = load_run_config(run_dir)
+    model = LoopFormerLM(run.architecture(), device=device, dtype=torch.float32)
+    load_model(checkpoint_path or latest_checkpoint_path(run_dir), model)
+    model.eval()
+    return model, run
