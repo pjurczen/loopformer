@@ -97,7 +97,23 @@ The LoopFormer block peaked at 46 GB at batch 64 against 37 GB for a plain block
 - **The scales do no work.** Gates alone match adaLN within noise at every loop count, and halve the gradient bursts of early warmup. The paper's full modulation is not needed for its result here.
 - **Dropping the modulation costs 0.023**, mostly at two loops (3.968 against 3.928). A multiplicative per-loop signal is worth that much, in line with TMLT's argument; an additive one is not enough.
 - **A few per-loop weights add nothing at this budget.** LoRA 32 lands on top of additive (3.901) while costing 9% per step.
-- **None of them is lighter, which is the surprise.** The design of this ablation assumed the modulation was the 9 GB between a LoopFormer block and a plain one; that assumption was never measured, and it was wrong. Removing the whole modulation moved the peak from 46.0 to 45.3 GB. And the LoRA variant, which adds tensors, peaked at 35.8 GB. So the architecture does not explain the peak. The remaining hypothesis is the compiler: the plain model is compiled as one graph, the LoopFormer compiles each block on its own, and what `torch.compile` saves for the backward pass can differ a lot between graphs. That is a hypothesis until a run with the whole model compiled measures it.
+- **None of them is lighter, which is the surprise.** The design of this ablation assumed the modulation was the 9 GB between a LoopFormer block and a plain one; that assumption was never measured, and it was wrong. Removing the whole modulation moved the peak from 46.0 to 45.3 GB. And the LoRA variant, which adds tensors, peaked at 35.8 GB.
+
+### Where the memory goes, measured
+
+`train.py --memory_snapshot_step N` records every allocation of one training step (`torch.cuda.memory._record_memory_history`) and writes `memory_snapshot.pickle` into the run folder; `profiling.py` replays the trace to the peak. For 3×4 at batch 64 (step 150, 45.3 GB live at the peak):
+
+| GB | What | Where |
+|---|---|---|
+| 14.6 | the attention probabilities after softmax, kept for backward: 805 MB × 12 block applications in float32, plus a bf16 copy each | `softmax` |
+| 6.0 | the raw q·k score matrices (bf16, 403 MB × 12) and the attention outputs | `scaled_dot_product_attention` |
+| 10.5 | the loss: the bf16 logits, their max-subtracted copy, and a float32 cast and a float32 `exp` over 64 × 512 × 32,000 (4.2 GB each) | `cross_entropy` |
+| 9.8 | the inputs the linear layers keep: qkv outputs, SwiGLU inner activations, output projections | `Linear.forward` |
+| 1.6 | the SwiGLU gate product | `SwiGLU.forward` |
+| 1.2 | the adaLN multiplies | `AdaLNBlock.forward` |
+| 0.6 | norms, embeddings, the rest | |
+
+The modulation is 1.2 GB. The stored attention matrices are 20 GB, 45% of the peak, and half of that is float32 because autocast runs the hand-written softmax's `exp` and `sum` in float32. The loss is another 10 GB; the "no float32 copy of the logits" in the training step avoided one copy, and autocast makes two more inside `exp`. The levers are therefore implementation, not architecture: a fused attention kernel (which the plain model would gain just as much from), a cross-entropy that does not materialize float32 copies of the logits, and a bf16 softmax. Why the plain model peaks at 37 GB with the same attention and loss is not measured yet: the same snapshot on it would say.
 
 ### Phase 2: 45 minutes on a B200
 
