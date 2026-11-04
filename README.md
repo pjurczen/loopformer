@@ -79,6 +79,26 @@ The loss falls with every added loop, by far the most from one loop to two. One 
 
 The per-loop evaluation of one run takes 10 to 12 minutes on the A100: the full validation set once per M, with M loops each.
 
+### Ablations: lighter ways to condition the shared block
+
+The LoopFormer block peaked at 46 GB at batch 64 against 37 GB for a plain block, which kept the B200 run from the plain model's batch 256. The adaLN modulation (the (1 + γ) scale after each norm and the gate α on each branch) looked like the cause, so three lighter conditionings ran on the 3×4 shape with the phase-1 flags, one change each against the phase-1 run (`--conditioning gate`, `--conditioning additive`, `--conditioning additive --loop_lora_rank 32`):
+
+- **gate:** the plain block (norms with their learned weight) plus a zero-start gate α per branch; no scales.
+- **additive:** the plain block; the (t, Δt) vector is added to the hidden state at each loop start, as Universal Transformers add their step embedding. Its conditioning MLPs start at zero.
+- **additive + LoRA 32:** additive, plus per-loop low-rank deltas (rank 32) on the five shared matrices, as in Relaxed Recursive Transformers: 5M extra weights for 3×4, trained with AdamW.
+
+| Variant | Loss at 4 loops | Loss at 1 / 2 / 3 loops | Steps | Peak memory | ms per step | Max gradient norm in warmup |
+|---|---|---|---|---|---|---|
+| adaLN, scales + gates (phase 1) | 3.879 | 4.110 / 3.928 / 3.893 | 2,130 | 46.0 GB | 417 | 18.1 |
+| gate | 3.881 | 4.120 / 3.929 / 3.895 | 2,148 | 45.9 GB | 413 | 8.4 |
+| additive | 3.902 | 4.133 / 3.968 / 3.913 | 2,041 | 45.3 GB | 438 | 3.7 |
+| additive + LoRA 32 | 3.901 | 4.138 / 3.988 / 3.923 | 1,951 | 35.8 GB | 456 | 2.7 |
+
+- **The scales do no work.** Gates alone match adaLN within noise at every loop count, and halve the gradient bursts of early warmup. The paper's full modulation is not needed for its result here.
+- **Dropping the modulation costs 0.023**, mostly at two loops (3.968 against 3.928). A multiplicative per-loop signal is worth that much, in line with TMLT's argument; an additive one is not enough.
+- **A few per-loop weights add nothing at this budget.** LoRA 32 lands on top of additive (3.901) while costing 9% per step.
+- **None of them is lighter, which is the surprise.** Removing the whole modulation moved the peak from 46.0 to 45.3 GB, so the modulation was not the 9 GB. And the LoRA variant, which adds tensors, peaked at 35.8 GB. The saved activations therefore depend on what the compiler decides to keep for the backward pass rather than on the architecture: the plain model is compiled as one graph, the LoopFormer compiles each block on its own, which denies the compiler the chance to recompute cheap intermediates across blocks. That makes the memory gap an implementation effect, to be tested by compiling the whole model per schedule, not an architectural one.
+
 ### Phase 2: 45 minutes on a B200
 
 The best phase-1 shape, 6×2, for the leaderboard budget. The plain model's batch 256 does not fit: phase 1 peaked at 46 GB at batch 64, which scales to about the B200's whole 180 GB. So batch 192 with the learning rate √-scaled from 4e-3 at batch 64, 6.9e-3 decaying to 6.9e-4, warmup 500 steps, and a reserve of 2 minutes for the final validation.
