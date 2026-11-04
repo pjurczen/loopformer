@@ -43,4 +43,42 @@ The training data and the tokenizer are those of the assignment, `data/owt-32k/*
 
 ## Results
 
-Pending: see the design and plan in `../docs/playbooks/`.
+All runs use OpenWebText with the 32K-vocabulary tokenizer, context 512, d_model 768, 12 heads, d_ff 2048, Muon for the block matrices and AdamW for the rest, bf16, warmup 120 steps, weight decay 0.1. The loss is the cross-entropy in nats per token on the whole validation set (66M tokens), measured at the full route of L loops unless a loop count is given.
+
+### Phase 1: equal time, 15 minutes on one A100-80GB
+
+Batch 64, learning rate 4e-3 decaying to 4e-4 over the 15 minutes: the settings of the plain 12-layer model with QK-norm, which is the reference. Unique weights exclude the embeddings; a LoopFormer block has 7.1M weights plus a 2.4M modulator, and the two conditioning MLPs add 1.6M.
+
+| Model | Unique weights | Steps | Tokens seen | ms per step | Peak memory | Loss |
+|---|---|---|---|---|---|---|
+| plain 12L/768 + QK-norm (reference) | 85M | 2,784 | 91M | 302 | 37 GB | **3.693** |
+| LoopFormer 6×2 | 58M | 2,103 | 69M | 422 | 46 GB | 3.831 |
+| LoopFormer 4×3 | 39M | 2,136 | 70M | 416 | 46 GB | 3.854 |
+| LoopFormer 3×4 | 30M | 2,130 | 70M | 417 | 46 GB | 3.879 |
+| LoopFormer 2×6 | 21M | 2,191 | 72M | 408 | 46 GB | 3.910 |
+
+- **Equal time:** every looped shape trails the plain 12-layer model, by 0.14 (6×2) to 0.22 (2×6). The more unique blocks, the better: looping a small stack more often does not make up for its missing weights. This matches the paper, where looped models trail non-looped ones on perplexity and the gap is explained by parameters and memorization.
+- **Part of the gap is speed.** A LoopFormer step runs the long route and a sampled shorter one, about 1.4× the cost of a plain step, so in 15 minutes it sees 70M tokens where the plain model sees 91M.
+- **Equal parameters:** 6×2 (58M) against the plain 8L/768 (57M, 3.669; trained on a 40 GB A100 at learning rate 2.8e-3 without QK-norm, 130M tokens in its 15 minutes): the looped model is 0.16 worse. It also saw half the tokens, so this is an equal-time comparison at equal parameters, not an equal-token one.
+- **Stability:** the gradient norm spiked to 18 in the first steps of 3×4 and 2×6 (6 and 9 for 4×3 and 6×2; 2.4 for the plain model). All four runs recovered and trained normally after warmup.
+
+### Elastic depth: one trained model at every loop count
+
+The loss of each phase-1 model when run with M loops, on the schedule with the larger steps first (for example (½, ¼, ¼) for M = 3 of L = 4):
+
+| Loops M | 2×6 | 3×4 | 4×3 | 6×2 |
+|---|---|---|---|---|
+| 1 | 4.564 | 4.110 | 4.010 | 3.876 |
+| 2 | 4.073 | 3.928 | 3.879 | 3.831 |
+| 3 | 3.961 | 3.893 | 3.854 | |
+| 4 | 3.934 | 3.879 | | |
+| 5 | 3.920 | | | |
+| 6 | 3.910 | | | |
+
+The loss falls with every added loop, by far the most from one loop to two. One loop fewer than L costs 0.01–0.03, half the loops cost 0.05–0.16, and a single loop costs 0.05 (6×2) to 0.65 (2×6). So a trained LoopFormer does give a usable model at a reduced budget, and the price of each skipped loop is small near the full route.
+
+The per-loop evaluation of one run takes 10 to 12 minutes on the A100: the full validation set once per M, with M loops each.
+
+### Phase 2: 45 minutes on a B200
+
+Pending.
