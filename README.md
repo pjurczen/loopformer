@@ -113,7 +113,9 @@ The LoopFormer block peaked at 46 GB at batch 64 against 37 GB for a plain block
 | 1.2 | the adaLN multiplies | `AdaLNBlock.forward` |
 | 0.6 | norms, embeddings, the rest | |
 
-The modulation is 1.2 GB. The stored attention matrices are 20 GB, 45% of the peak, and half of that is float32 because autocast runs the hand-written softmax's `exp` and `sum` in float32. The loss is another 10 GB; the "no float32 copy of the logits" in the training step avoided one copy, and autocast makes two more inside `exp`. The levers are therefore implementation, not architecture: a fused attention kernel (which the plain model would gain just as much from), a cross-entropy that does not materialize float32 copies of the logits, and a bf16 softmax. Why the plain model peaks at 37 GB with the same attention and loss is not measured yet: the same snapshot on it would say.
+The modulation is 1.2 GB. The stored attention matrices are 20 GB, 45% of the peak, and half of that is float32 because autocast runs the hand-written softmax's `exp` and `sum` in float32. The loss is another 10 GB; the "no float32 copy of the logits" in the training step avoided one copy, and autocast makes two more inside `exp`.
+
+The same snapshot on the plain 12-layer model (same batch, same step; peak 36.1 GB) explains the gap. Every row matches within a gigabyte except one: the float32 softmax output. The plain model, compiled as one graph, keeps a single one (0.8 GB) and recomputes the others during backward from the bf16 scores; the LoopFormer, compiled block by block, keeps all twelve (9.7 GB). The 9 GB between the two models is a compile-granularity effect, not the architecture. The levers are therefore implementation: a whole-model compile for the LoopFormer (one graph per loop count), a fused attention kernel (which the plain model would gain just as much from), a cross-entropy that does not materialize float32 copies of the logits, and a bf16 softmax.
 
 ### Phase 2: 45 minutes on a B200
 
