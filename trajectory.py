@@ -6,6 +6,8 @@ long trajectory.
 """
 import random
 
+MIN_LOOP_MAX = 2  # a short trajectory needs fewer loops than the long one
+
 
 def long_trajectory(loop_max: int) -> list[float]:
     return [1 / loop_max] * loop_max
@@ -14,8 +16,8 @@ def long_trajectory(loop_max: int) -> list[float]:
 def sample_short_trajectory(loop_max: int, rng: random.Random = random) -> list[float]:
     """The reference code's sampler: a length from 1 to loop_max - 1, then step by step any size that leaves at least one
     unit for each remaining step. The last step takes what is left."""
-    if loop_max < 2:
-        raise ValueError("loop_max must be at least 2")
+    if loop_max < MIN_LOOP_MAX:
+        raise ValueError(f"loop_max must be at least {MIN_LOOP_MAX}")
     length = rng.randint(1, loop_max - 1)
     units = []
     remaining = loop_max

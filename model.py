@@ -253,6 +253,12 @@ class LoopFormerLM(torch.nn.Module):
                             device=device, dtype=dtype)
             for _ in range(config.loop_blocks))
         self.ln_final = RMSNorm(config.d_model, config.eps, device=device, dtype=dtype)
+        self._block_calls: list | None = None
+
+    def compile_blocks(self, backend: str) -> None:
+        """Compiles each block on its own, not the whole model: a trajectory of any length then reuses the one compiled
+        block, and checkpoints keep the plain modules' keys."""
+        self._block_calls = [torch.compile(block, backend=backend) for block in self.blocks]
 
     def forward(self, tokens: torch.Tensor, schedule: list[float]) -> tuple[torch.Tensor, torch.Tensor]:
         """Returns the logits and the hidden state after the final norm, (batch, seq_len, vocab) and (batch, seq_len, d_model)."""
@@ -262,7 +268,7 @@ class LoopFormerLM(torch.nn.Module):
         for step in schedule:
             step = torch.tensor(step, device=device)
             c = self.time_embedding(t) + self.step_embedding(step)
-            for block in self.blocks:
+            for block in self._block_calls or self.blocks:
                 x = block(x, c)
             t = t + step
         hidden = self.ln_final(x)
