@@ -46,9 +46,8 @@ class LoopLoRA(torch.nn.Module):
         self.register_buffer("loop", torch.zeros((), dtype=torch.long, device=device), persistent=False)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        loop = self.loop.view(1).clone()  # a copy: autograd keeps the index, and the buffer changes at the next loop
-        a = self.A.index_select(0, loop).squeeze(0)
-        b = self.B.index_select(0, loop).squeeze(0)
+        a = self.A.index_select(0, self.loop.view(1)).squeeze(0)
+        b = self.B.index_select(0, self.loop.view(1)).squeeze(0)
         return einsum(einsum(x, a, "... d_in, r d_in -> ... r"), b, "... r, d_out r -> ... d_out")
 
 
@@ -272,8 +271,13 @@ class LoopFormerBlock(torch.nn.Module):
             linear.attach_lora(rank, loops, device=device, dtype=dtype)
 
     def set_loop(self, position: int) -> None:
-        for lora in (module for module in self.modules() if isinstance(module, LoopLoRA)):
-            lora.loop.fill_(position)
+        # A new tensor each loop, never an in-place change: autograd (and a compiled block) keeps the index of each
+        # loop for the backward pass, so the index a previous loop used must stay as it was.
+        loras = [module for module in self.modules() if isinstance(module, LoopLoRA)]
+        if loras:
+            loop = torch.full((), position, dtype=torch.long, device=loras[0].loop.device)
+            for lora in loras:
+                lora.loop = loop
 
     def lora_parameters(self) -> list[torch.nn.Parameter]:
         return [p for module in self.modules() if isinstance(module, LoopLoRA) for p in module.parameters()]
