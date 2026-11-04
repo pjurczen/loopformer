@@ -10,7 +10,6 @@ import argparse
 import json
 import os
 import random
-import subprocess
 import time
 from datetime import datetime
 
@@ -27,6 +26,7 @@ from optim import AdamWOptimizer, MuonOptimizer, cosine_lr_schedule, cosine_lr_s
 from run import CHECKPOINTS_DIR, CONFIG_FILE, METRICS_FILE, LossConfig, RunConfig
 from tokenizer import read_tokenizer_config
 from trajectory import MIN_LOOP_MAX, long_trajectory, sample_short_trajectory
+from version import git_commit
 
 
 def training(args: argparse.Namespace):
@@ -198,18 +198,6 @@ def peak_memory_gb(device: str) -> float | None:
     if device.startswith("cuda"):
         return round(torch.cuda.max_memory_allocated() / 1e9, 2)
     return None
-
-
-def git_commit() -> str | None:
-    # Inside a training image there is no Git; the cloud runner passes the version in as $GIT_COMMIT.
-    if os.environ.get("GIT_COMMIT"):
-        return os.environ["GIT_COMMIT"]
-    try:
-        commit = subprocess.run(["git", "rev-parse", "--short", "HEAD"], capture_output=True, text=True, check=True).stdout.strip()
-        dirty = subprocess.run(["git", "diff", "--quiet", "HEAD", "--"], check=False).returncode != 0
-    except (OSError, subprocess.CalledProcessError):
-        return None
-    return f"{commit}-dirty" if dirty else commit
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
