@@ -40,6 +40,8 @@ class RunConfig(BaseModel):
     optimizer_muon: bool
     loop_blocks: int
     loop_max: int
+    conditioning: str = "adaln"  # older runs' config.json predates this field; they used adaln
+    loop_lora_rank: int = 0  # older runs' config.json predates this field; they had no LoRA
     shortcut_weight: float
     consistency_weight: float
     model_vocab_size: int
@@ -75,11 +77,14 @@ class RunConfig(BaseModel):
             vocab_size=self.model_vocab_size,
             context_length=self.model_context_length,
             loop_blocks=self.loop_blocks,
+            loop_max=self.loop_max,
             d_model=self.model_d_model,
             num_heads=self.model_num_heads,
             d_ff=self.model_d_ff,
             eps=self.model_eps,
             rope_theta=self.model_rope_theta,
+            conditioning=self.conditioning,
+            loop_lora_rank=self.loop_lora_rank,
         )
 
     def loss(self) -> LossConfig:

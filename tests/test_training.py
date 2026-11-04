@@ -1,21 +1,40 @@
 import numpy as np
+import pytest
 import torch
-from support import CONTEXT_LENGTH, LOOP_MAX, TINY_CONFIG, VOCAB_SIZE, read_metrics
+from support import (
+    CONTEXT_LENGTH,
+    LOOP_MAX,
+    OVERFIT_VARIANT,
+    TINY_CONFIG,
+    VARIANTS,
+    VOCAB_SIZE,
+    one_sample_dataset,
+    overfit_args,
+    read_metrics,
+)
 
-from checkpoint import load_model
-from model import LoopFormerLM
-from run import latest_checkpoint_path, load_run_config
+from run import load_run_config, load_trained_model
+from train import parse_args, training
 from trajectory import evaluation_schedule
 
 
 def loss_on_the_sample(run_dir, sample: np.ndarray, loops: int) -> float:
-    model = LoopFormerLM(TINY_CONFIG)
-    load_model(latest_checkpoint_path(run_dir), model)
+    model, _ = load_trained_model(run_dir, device="cpu")
     inputs = torch.tensor(sample[:-1].astype(np.int64))[None]
     targets = torch.tensor(sample[1:].astype(np.int64))
     with torch.no_grad():
         logits, _ = model(inputs, evaluation_schedule(LOOP_MAX, loops))
     return torch.nn.functional.cross_entropy(logits[0], targets).item()
+
+
+@pytest.mark.parametrize("variant", [v for v in VARIANTS if v != OVERFIT_VARIANT])  # the overfit_run fixture covers that one
+def test_each_conditioning_variant_trains_on_one_sample_to_near_zero_loss(tmp_path, variant):
+    sample = one_sample_dataset(tmp_path / "train.npy")
+    args = parse_args(overfit_args(tmp_path, variant, variant))
+
+    training(args)
+
+    assert loss_on_the_sample(tmp_path / "runs" / variant, sample, loops=LOOP_MAX) < 0.05
 
 
 def test_training_on_one_sample_drives_the_full_route_loss_to_zero(overfit_run):

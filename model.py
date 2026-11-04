@@ -17,24 +17,66 @@ class ModelConfig:
     vocab_size: int
     context_length: int
     loop_blocks: int  # k: the number of unique blocks, applied once per loop
+    loop_max: int  # L: the loops of the long trajectory; the model needs it only to size the per-loop LoRA table
     d_model: int
     num_heads: int
     d_ff: int | None = None
     eps: float = 1e-5
     rope_theta: float = 10_000.0
+    conditioning: str = "adaln"  # how a block learns where it is in the loop: adaln (scales + gates), gate, additive
+    loop_lora_rank: int = 0  # per-loop low-rank deltas on the shared matrices; 0 turns them off
+
+    def __post_init__(self):
+        if self.conditioning not in CONDITIONINGS:
+            raise ValueError(f"conditioning must be one of {CONDITIONINGS}, got {self.conditioning!r}")
+
+
+class LoopLoRA(torch.nn.Module):
+    """Per-loop low-rank deltas for one shared matrix (Relaxed Recursive Transformers): at loop position i the matrix
+    acts as W + B_i A_i. B starts at zero, so a fresh model equals the fully shared one. `loop` holds the current
+    position; the model sets it before each loop."""
+    A: torch.nn.Parameter  # (loops, rank, in_features)
+    B: torch.nn.Parameter  # (loops, out_features, rank)
+
+    def __init__(self, in_features: int, out_features: int, rank: int, loops: int, device=None, dtype=None):
+        super().__init__()
+        bound = 1 / math.sqrt(in_features)
+        self.A = torch.nn.parameter.Parameter(torch.empty(loops, rank, in_features, device=device, dtype=dtype).uniform_(-bound, bound))
+        self.B = torch.nn.parameter.Parameter(torch.zeros(loops, out_features, rank, device=device, dtype=dtype))
+        self.register_buffer("loop", torch.zeros((), dtype=torch.long, device=device), persistent=False)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        loop = self.loop.view(1).clone()  # a copy: autograd keeps the index, and the buffer changes at the next loop
+        a = self.A.index_select(0, loop).squeeze(0)
+        b = self.B.index_select(0, loop).squeeze(0)
+        return einsum(einsum(x, a, "... d_in, r d_in -> ... r"), b, "... r, d_out r -> ... d_out")
 
 
 class Linear(torch.nn.Module):
     weight: torch.nn.Parameter  # (out_features, in_features)
+    lora: LoopLoRA | None
 
     def __init__(self, in_features: int, out_features: int, device: torch.device | None = None, dtype: torch.dtype | None = None):
         super().__init__()
         self.weight = torch.nn.parameter.Parameter(torch.empty(out_features, in_features, device=device, dtype=dtype))
         std = math.sqrt(2 / (in_features + out_features))
         torch.nn.init.trunc_normal_(tensor=self.weight, mean=0, std=std, a=-3 * std, b=3 * std)
+        self.lora = None
+
+    def attach_lora(self, rank: int, loops: int, device=None, dtype=None) -> None:
+        out_features, in_features = self.weight.shape
+        self.lora = LoopLoRA(in_features, out_features, rank, loops, device=device, dtype=dtype)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return einsum(x, self.weight, "... d_in, d_out d_in -> ... d_out")
+        y = einsum(x, self.weight, "... d_in, d_out d_in -> ... d_out")
+        return y if self.lora is None else y + self.lora(x)
+
+
+def zero_(linear: torch.nn.Linear) -> torch.nn.Linear:
+    """A linear layer that starts as the zero map, so what it feeds starts switched off (adaLN-Zero)."""
+    torch.nn.init.zeros_(linear.weight)
+    torch.nn.init.zeros_(linear.bias)
+    return linear
 
 
 class EmbeddingLookup(torch.nn.Module):
@@ -191,7 +233,7 @@ class TimestepEmbedding(torch.nn.Module):
     """A scalar in [0, 1] to a d_model vector: fixed sine and cosine features at geometrically spaced frequencies,
     then a two-layer MLP. The same construction as the diffusion-model timestep embedding."""
 
-    def __init__(self, d_model: int, frequency_size: int = 256, max_period: float = 10_000.0, device=None, dtype=None):
+    def __init__(self, d_model: int, frequency_size: int = 256, max_period: float = 10_000.0, zero_output: bool = False, device=None, dtype=None):
         super().__init__()
         half = frequency_size // 2
         frequencies = torch.exp(-math.log(max_period) * torch.arange(half, device=device, dtype=torch.float32) / half)
@@ -201,6 +243,8 @@ class TimestepEmbedding(torch.nn.Module):
             torch.nn.SiLU(),
             torch.nn.Linear(d_model, d_model, bias=True, device=device, dtype=dtype),
         )
+        if zero_output:  # the embedding starts at zero, for a use where it is added rather than passed through a zero modulator
+            zero_(self.mlp[-1])
 
     # value: a 0-d tensor, so a compiled caller sees a tensor input rather than a constant per distinct value
     def forward(self, value: torch.Tensor) -> torch.Tensor:  # (d_model, )
@@ -210,9 +254,10 @@ class TimestepEmbedding(torch.nn.Module):
 
 
 class LoopFormerBlock(torch.nn.Module):
-    """A pre-norm transformer block whose norms have no weight of their own: the conditioning vector c sets the scale
-    after each norm, (1 + gamma), and gates each residual branch with alpha (adaLN, as in Diffusion Transformers).
-    The modulator starts at zero, so a fresh block passes its input through unchanged."""
+    """A pre-norm transformer block of the shared stack. Each subclass is one way for the block to learn where it is
+    in the loop from the conditioning vector c (see BLOCKS). The forward passes stay separate on purpose: the
+    ablation measures exactly the operations each variant adds."""
+    conditions_input: bool = False  # True: c is added to the hidden state before the block instead of modulating it
 
     def __init__(self, d_model: int, num_heads: int, d_ff: int | None, eps: float, max_seq_len: int, theta: float,
                  device: torch.device | None = None, dtype: torch.dtype | None = None):
@@ -220,9 +265,27 @@ class LoopFormerBlock(torch.nn.Module):
         self.eps = eps
         self.attn = CausalMultiHeadSelfAttention(d_model, num_heads, max_seq_len, theta, eps=eps, device=device, dtype=dtype)
         self.ffn = SwiGLU(d_model, d_ff, device=device, dtype=dtype)
-        self.modulator = torch.nn.Linear(d_model, 4 * d_model, bias=True, device=device, dtype=dtype)
-        torch.nn.init.zeros_(self.modulator.weight)
-        torch.nn.init.zeros_(self.modulator.bias)
+
+    def attach_lora(self, rank: int, loops: int, device=None, dtype=None) -> None:
+        """Per-loop low-rank deltas on the block's shared matrices (qkv, output, w1, w2, w3)."""
+        for linear in (module for module in self.modules() if isinstance(module, Linear)):
+            linear.attach_lora(rank, loops, device=device, dtype=dtype)
+
+    def set_loop(self, position: int) -> None:
+        for lora in (module for module in self.modules() if isinstance(module, LoopLoRA)):
+            lora.loop.fill_(position)
+
+    def lora_parameters(self) -> list[torch.nn.Parameter]:
+        return [p for module in self.modules() if isinstance(module, LoopLoRA) for p in module.parameters()]
+
+
+class AdaLNBlock(LoopFormerBlock):
+    """adaln: the norms have no weight of their own; c sets the scale after each norm, (1 + gamma), and gates each
+    residual branch with alpha (adaLN-Zero, as in Diffusion Transformers). A fresh block passes its input through."""
+
+    def __init__(self, d_model: int, *args, device=None, dtype=None):
+        super().__init__(d_model, *args, device=device, dtype=dtype)
+        self.modulator = zero_(torch.nn.Linear(d_model, 4 * d_model, bias=True, device=device, dtype=dtype))
 
     # x (batch, seq_len, d_model), c (d_model, )
     def forward(self, x: torch.Tensor, c: torch.Tensor) -> torch.Tensor:
@@ -230,6 +293,42 @@ class LoopFormerBlock(torch.nn.Module):
         x = x + alpha1 * self.attn(rms_normalize(x, self.eps).to(x.dtype) * (1 + gamma1))
         x = x + alpha2 * self.ffn(rms_normalize(x, self.eps).to(x.dtype) * (1 + gamma2))
         return x
+
+
+class GateBlock(LoopFormerBlock):
+    """gate: the plain block (norms with their learned weight) plus a gate alpha per branch from c. A fresh block
+    passes its input through."""
+
+    def __init__(self, d_model: int, *args, device=None, dtype=None):
+        super().__init__(d_model, *args, device=device, dtype=dtype)
+        self.ln1 = RMSNorm(d_model, self.eps, device=device, dtype=dtype)
+        self.ln2 = RMSNorm(d_model, self.eps, device=device, dtype=dtype)
+        self.modulator = zero_(torch.nn.Linear(d_model, 2 * d_model, bias=True, device=device, dtype=dtype))
+
+    def forward(self, x: torch.Tensor, c: torch.Tensor) -> torch.Tensor:
+        alpha1, alpha2 = self.modulator(silu(c)).chunk(2, dim=-1)
+        x = x + alpha1 * self.attn(self.ln1(x))
+        x = x + alpha2 * self.ffn(self.ln2(x))
+        return x
+
+
+class PlainBlock(LoopFormerBlock):
+    """additive: the plain block. c is added to the hidden state before the block, not used here."""
+    conditions_input = True
+
+    def __init__(self, d_model: int, *args, device=None, dtype=None):
+        super().__init__(d_model, *args, device=device, dtype=dtype)
+        self.ln1 = RMSNorm(d_model, self.eps, device=device, dtype=dtype)
+        self.ln2 = RMSNorm(d_model, self.eps, device=device, dtype=dtype)
+
+    def forward(self, x: torch.Tensor, c: torch.Tensor) -> torch.Tensor:
+        x = x + self.attn(self.ln1(x))
+        x = x + self.ffn(self.ln2(x))
+        return x
+
+
+BLOCKS: dict[str, type[LoopFormerBlock]] = {"adaln": AdaLNBlock, "gate": GateBlock, "additive": PlainBlock}
+CONDITIONINGS = tuple(BLOCKS)
 
 
 class LoopFormerLM(torch.nn.Module):
@@ -244,14 +343,19 @@ class LoopFormerLM(torch.nn.Module):
 
     def __init__(self, config: ModelConfig, device: torch.device | None = None, dtype: torch.dtype | None = None):
         super().__init__()
+        block_class = BLOCKS[config.conditioning]
+        # With an additive block, c is added to the hidden state, so it starts at zero: a fresh model is a plain looped model.
+        self.conditions_input = block_class.conditions_input
         self.lm_head = Linear(config.d_model, config.vocab_size, device=device, dtype=dtype)
         self.token_embeddings = EmbeddingLookup(weight=self.lm_head.weight, scale_factor=math.sqrt(config.d_model))
-        self.time_embedding = TimestepEmbedding(config.d_model, device=device, dtype=dtype)
-        self.step_embedding = TimestepEmbedding(config.d_model, device=device, dtype=dtype)
+        self.time_embedding = TimestepEmbedding(config.d_model, zero_output=self.conditions_input, device=device, dtype=dtype)
+        self.step_embedding = TimestepEmbedding(config.d_model, zero_output=self.conditions_input, device=device, dtype=dtype)
         self.blocks = torch.nn.ModuleList(
-            LoopFormerBlock(config.d_model, config.num_heads, config.d_ff, config.eps, config.context_length, config.rope_theta,
-                            device=device, dtype=dtype)
+            block_class(config.d_model, config.num_heads, config.d_ff, config.eps, config.context_length, config.rope_theta, device=device, dtype=dtype)
             for _ in range(config.loop_blocks))
+        if config.loop_lora_rank:
+            for block in self.blocks:
+                block.attach_lora(config.loop_lora_rank, config.loop_max, device=device, dtype=dtype)
         self.ln_final = RMSNorm(config.d_model, config.eps, device=device, dtype=dtype)
         self._block_calls: list | None = None
 
@@ -269,9 +373,13 @@ class LoopFormerLM(torch.nn.Module):
         x = self.token_embeddings(tokens)
         device = x.device
         t = torch.zeros((), device=device)
-        for step in schedule:
+        for position, step in enumerate(schedule):
             step = torch.tensor(step, device=device)
             c = self.time_embedding(t) + self.step_embedding(step)
+            if self.conditions_input:
+                x = x + c
+            for block in self.blocks:
+                block.set_loop(position)
             for block in self._block_calls or self.blocks:
                 x = block(x, c)
             t = t + step
@@ -280,5 +388,7 @@ class LoopFormerLM(torch.nn.Module):
 
     def muon_parameters(self) -> list[torch.nn.Parameter]:
         """The 2-D matrices inside the blocks, the modulators included: the parameters Muon updates. Everything else
-        (embeddings, conditioning MLPs, norm weights, biases) is for AdamW."""
-        return [p for block in self.blocks for p in block.parameters() if p.ndim == 2]
+        (embeddings, conditioning MLPs, norm weights, biases) is for AdamW, and so are the per-loop LoRA factors:
+        Muon's orthogonalized steps have a fixed size, which would move the zero-start B factors too hard."""
+        lora = {id(p) for block in self.blocks for p in block.lora_parameters()}
+        return [p for block in self.blocks for p in block.parameters() if p.ndim == 2 and id(p) not in lora]

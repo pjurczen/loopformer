@@ -21,7 +21,7 @@ import wandb
 from checkpoint import load_checkpoint, save_checkpoint
 from data import cross_entropy, get_batch, get_nonoverlapping_indices, get_random_indices
 from evaluate import validation_loss
-from model import LoopFormerLM
+from model import CONDITIONINGS, LoopFormerLM
 from optim import AdamWOptimizer, MuonOptimizer, cosine_lr_schedule, cosine_lr_schedule_by_time, gradient_clipping
 from run import CHECKPOINTS_DIR, CONFIG_FILE, METRICS_FILE, LossConfig, RunConfig
 from tokenizer import read_tokenizer_config
@@ -213,6 +213,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     arg_parser.add_argument("--optimizer_muon", action="store_true", help="Muon for the 2D matrices inside the blocks, AdamW for the rest")
     arg_parser.add_argument("--loop_blocks", type=int, required=True, help="k: the number of unique transformer blocks")
     arg_parser.add_argument("--loop_max", type=int, required=True, help="L: the number of loops of the long trajectory")
+    arg_parser.add_argument("--conditioning", choices=CONDITIONINGS, default="adaln",
+                            help="how a block learns its loop position: adaln (scales + gates), gate, or an additive embedding")
+    arg_parser.add_argument("--loop_lora_rank", type=int, default=0, help="rank of per-loop low-rank deltas on the shared matrices; 0 turns them off")
     arg_parser.add_argument("--shortcut_weight", type=float, default=0.1, help="weight of the short trajectory's cross-entropy")
     arg_parser.add_argument("--consistency_weight", type=float, default=0.1, help="weight of the MSE between the short and long hidden states")
     arg_parser.add_argument("--model_context_length", type=int, default=512)
