@@ -1,0 +1,32 @@
+[project]
+name = "loopformer"
+version = "0.1.0"
+description = "LoopFormer (arXiv 2602.11451) trained on OpenWebText, built from the cs336 assignment components"
+readme = "README.md"
+requires-python = ">=3.12,<3.14"
+dependencies = [
+    "torch~=2.11.0",    # PyPI's Linux build uses CUDA 13, which has B200 (sm_100) kernels
+    "numpy>=2.4",
+    "einops>=0.8",
+    "jaxtyping>=0.3",
+    "pydantic>=2.12.5",
+    "regex>=2026.3.32", # the tokenizer's pretoken pattern needs \p{L} classes
+    "wandb>=0.25",
+]
+
+[dependency-groups]
+dev = [
+    "modal>=1.6.3",
+    "pytest>=9.0",
+    "ruff>=0.15.8",
+]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 120
