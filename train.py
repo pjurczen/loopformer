@@ -249,9 +249,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     arg_parser.add_argument("--checkpoint_src", type=str, default=None)
     arg_parser.add_argument("--wandb_project", type=str, default=None)
     arg_parser.add_argument("--bf16", action="store_true")
-    arg_parser.add_argument("--compile", choices=COMPILE_SCOPES, default="blocks",
-                            help="torch.compile each block on its own, the whole forward pass unrolled (one graph per loop count), "
-                                 "or the whole forward pass with a while_loop (one graph)")
+    arg_parser.add_argument("--compile", choices=COMPILE_SCOPES, default="whole",
+                            help="torch.compile the whole forward pass unrolled (one graph per loop count; the plain model's memory), "
+                                 "each block on its own (9 GB more at batch 64), or the whole pass with a while_loop (a third of the memory, 15%% slower)")
     arg_parser.add_argument("--memory_snapshot_step", type=int, default=None,
                             help="record every allocation of this training step and write memory_snapshot.pickle into the run folder (CUDA only)")
     arg_parser.add_argument("--time_budget_minutes", type=float, default=None,
