@@ -5,6 +5,7 @@ __pycache__/
 .ruff_cache/
 .pytest_cache/
 .DS_Store
+.idea
 
 # the token arrays, the tokenizers and the run folders live outside git as links or copies (see README.md); no trailing slash, so links match too
 data
