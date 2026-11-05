@@ -122,9 +122,13 @@ def main(dataset: str, run_name: str, args: str):
 
     from version import git_commit  # runs locally, where Git is available; the run records the version
 
-    train.remote(dataset, run_name, shlex.split(args), git_commit() or "unknown")
+    # spawn, not remote: the call is handed to Modal and this process exits. A local process that waits on a .remote()
+    # call cancels it when it is killed, which took two runs down. Logs: `modal app logs <app id>` or the dashboard.
+    call = train.spawn(dataset, run_name, shlex.split(args), git_commit() or "unknown")
+    print(f"Submitted {run_name}: app {app.app_id}, call {call.object_id}. Logs: uv run modal app logs {app.app_id}")
 
 
 @app.local_entrypoint()
 def reevaluate(run_name: str, dataset: str = "owt-32k"):
-    evaluate_run.remote(dataset, run_name)
+    call = evaluate_run.spawn(dataset, run_name)
+    print(f"Submitted evaluation of {run_name}: app {app.app_id}, call {call.object_id}. Logs: uv run modal app logs {app.app_id}")
