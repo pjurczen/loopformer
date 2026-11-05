@@ -27,13 +27,14 @@ def loss_on_the_sample(run_dir, sample: np.ndarray, loops: int) -> float:
     return torch.nn.functional.cross_entropy(logits[0], targets).item()
 
 
-def test_training_with_the_whole_model_compiled_memorizes_the_sample_too(tmp_path):
+@pytest.mark.parametrize("scope", ["whole", "loop"])
+def test_training_with_the_whole_model_compiled_memorizes_the_sample_too(tmp_path, scope):
     sample = one_sample_dataset(tmp_path / "train.npy")
-    args = parse_args([*overfit_args(tmp_path, "whole"), "--compile", "whole"])
+    args = parse_args([*overfit_args(tmp_path, scope), "--compile", scope])
 
     training(args)
 
-    assert loss_on_the_sample(tmp_path / "runs" / "whole", sample, loops=LOOP_MAX) < 0.05
+    assert loss_on_the_sample(tmp_path / "runs" / scope, sample, loops=LOOP_MAX) < 0.05
 
 
 @pytest.mark.parametrize("variant", [v for v in VARIANTS if v != OVERFIT_VARIANT])  # the overfit_run fixture covers that one

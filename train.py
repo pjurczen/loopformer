@@ -21,7 +21,7 @@ import wandb
 from checkpoint import load_checkpoint, save_checkpoint
 from data import cross_entropy, get_batch, get_nonoverlapping_indices, get_random_indices
 from evaluate import validation_loss
-from model import CONDITIONINGS, LoopFormerLM
+from model import COMPILE_SCOPES, CONDITIONINGS, LoopFormerLM
 from optim import AdamWOptimizer, MuonOptimizer, cosine_lr_schedule, cosine_lr_schedule_by_time, gradient_clipping
 from profiling import dump_and_summarize, start_recording
 from run import CHECKPOINTS_DIR, CONFIG_FILE, METRICS_FILE, LossConfig, RunConfig
@@ -161,6 +161,8 @@ def training(args: argparse.Namespace):
             if last_step:
                 break
 
+    print("torch.compile times by phase (seconds, totals over the run):")
+    print(torch._dynamo.utils.compile_times(repr="str"))
     if wandb_run is not None:
         wandb_run.finish()
 
@@ -247,8 +249,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     arg_parser.add_argument("--checkpoint_src", type=str, default=None)
     arg_parser.add_argument("--wandb_project", type=str, default=None)
     arg_parser.add_argument("--bf16", action="store_true")
-    arg_parser.add_argument("--compile", choices=("blocks", "whole"), default="blocks",
-                            help="torch.compile each block on its own, or the whole forward pass (one graph per schedule)")
+    arg_parser.add_argument("--compile", choices=COMPILE_SCOPES, default="blocks",
+                            help="torch.compile each block on its own, the whole forward pass unrolled (one graph per loop count), "
+                                 "or the whole forward pass with a while_loop (one graph)")
     arg_parser.add_argument("--memory_snapshot_step", type=int, default=None,
                             help="record every allocation of this training step and write memory_snapshot.pickle into the run folder (CUDA only)")
     arg_parser.add_argument("--time_budget_minutes", type=float, default=None,

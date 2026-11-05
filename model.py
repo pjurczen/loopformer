@@ -10,6 +10,9 @@ from dataclasses import dataclass
 import torch
 from einops import einsum, rearrange
 from jaxtyping import Bool, Float
+from torch._higher_order_ops import while_loop
+
+COMPILE_SCOPES = ("blocks", "whole", "loop")
 
 
 @dataclass(frozen=True)
@@ -67,7 +70,9 @@ class Linear(torch.nn.Module):
         self.lora = LoopLoRA(in_features, out_features, rank, loops, device=device, dtype=dtype)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        y = einsum(x, self.weight, "... d_in, d_out d_in -> ... d_out")
+        # F.linear rather than the original einsum: the same x @ W^T, but its weight gradient comes out in plain
+        # row-major layout, which a torch while_loop requires of every tensor it carries through its backward pass.
+        y = torch.nn.functional.linear(x, self.weight)
         return y if self.lora is None else y + self.lora(x)
 
 
@@ -361,45 +366,86 @@ class LoopFormerLM(torch.nn.Module):
             for block in self.blocks:
                 block.attach_lora(config.loop_lora_rank, config.loop_max, device=device, dtype=dtype)
         self.ln_final = RMSNorm(config.d_model, config.eps, device=device, dtype=dtype)
+        self.loop_max = config.loop_max
+        self.loop_lora_rank = config.loop_lora_rank
         self._block_calls: list | None = None
         self._forward_call = None
+        self._scope = "blocks"
 
     def compile_for_device(self, device: str, scope: str = "blocks") -> None:
         """Compiles the model for training. On CUDA the inductor backend generates fused kernels and float32 matmuls
         may use TF32 tensor cores; elsewhere aot_eager works (MPS, CPU). Checkpoints keep the plain modules' keys.
 
         scope "blocks" compiles each block on its own: a trajectory of any length reuses the one compiled block.
-        scope "whole" compiles the whole forward pass, one graph per distinct schedule, which lets the compiler
-        decide across blocks what to save for the backward pass and what to recompute."""
+        scope "whole" compiles the whole forward pass with the loop unrolled: one graph per loop count, which lets the
+        compiler decide across blocks what to save for the backward pass and what to recompute.
+        scope "loop" compiles the whole forward pass with the loop as a torch while_loop: one graph for every loop
+        count. Recompilations are logged, so a run shows how many graphs it built."""
+        if scope not in COMPILE_SCOPES:
+            raise ValueError(f"scope must be one of {COMPILE_SCOPES}, got {scope!r}")
+        if scope == "loop" and self.loop_lora_rank:
+            raise ValueError("per-loop LoRA sets its position on the blocks, which a while_loop body may not do; use scope 'blocks' or 'whole'")
         if device.startswith("cuda"):
             torch.set_float32_matmul_precision("high")
         backend = "inductor" if device.startswith("cuda") else "aot_eager"
-        if scope == "whole":
-            torch._dynamo.config.cache_size_limit = 64  # the schedules seen in training: the long one and the sampled short ones
-            self._forward_call = torch.compile(self._forward, backend=backend)
-        elif scope == "blocks":
+        torch._logging.set_logs(recompiles=True)
+        self._scope = scope
+        if scope == "blocks":
             self._block_calls = [torch.compile(block, backend=backend) for block in self.blocks]
+        elif scope == "whole":
+            torch._dynamo.config.cache_size_limit = 64
+            self._forward_call = torch.compile(self._forward_unrolled, backend=backend)
         else:
-            raise ValueError(f"scope must be 'blocks' or 'whole', got {scope!r}")
+            self._forward_call = torch.compile(self._forward_while, backend=backend, fullgraph=True)
 
     def forward(self, tokens: torch.Tensor, schedule: list[float]) -> tuple[torch.Tensor, torch.Tensor]:
-        """Returns the logits and the hidden state after the final norm, (batch, seq_len, vocab) and (batch, seq_len, d_model)."""
-        return (self._forward_call or self._forward)(tokens, schedule)
+        """Returns the logits and the hidden state after the final norm, (batch, seq_len, vocab) and (batch, seq_len, d_model).
 
-    def _forward(self, tokens: torch.Tensor, schedule: list[float]) -> tuple[torch.Tensor, torch.Tensor]:
+        The schedule enters the compiled part as a tensor, so its values are inputs of the graph, not constants. With
+        scope "loop" it is padded to loop_max steps and the loop count travels as a tensor too, so every call has the
+        same shapes and one graph serves every loop count."""
+        device = tokens.device
+        if self._scope == "loop":
+            padded = torch.tensor(schedule + [0.0] * (self.loop_max - len(schedule)), device=device)
+            return self._forward_call(tokens, padded, torch.tensor(len(schedule), device=device))
+        steps = torch.tensor(schedule, device=device)
+        return (self._forward_call or self._forward_unrolled)(tokens, steps)
+
+    def _forward_unrolled(self, tokens: torch.Tensor, steps: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         x = self.token_embeddings(tokens)
-        device = x.device
-        t = torch.zeros((), device=device)
-        for position, step in enumerate(schedule):
-            step = torch.tensor(step, device=device)
-            c = self.time_embedding(t) + self.step_embedding(step)
-            if self.conditions_input:
-                x = x + c
+        t = torch.zeros((), device=x.device)
+        for position in range(steps.shape[0]):
+            step = steps[position]
+            x = self._loop_body(x, t, step, position)
+            t = t + step
+        return self._output(x)
+
+    def _forward_while(self, tokens: torch.Tensor, steps: torch.Tensor, loops: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        def cond_fn(position, t, x):
+            return position < loops
+
+        def body_fn(position, t, x):
+            step = steps.index_select(0, position.view(1)).squeeze()
+            return position + 1, t + step, self._loop_body(x, t, step)
+
+        x = self.token_embeddings(tokens)
+        start = (torch.zeros((), dtype=torch.long, device=x.device), torch.zeros((), device=x.device), x)
+        _, _, x = while_loop(cond_fn, body_fn, start)
+        return self._output(x)
+
+    def _loop_body(self, x: torch.Tensor, t: torch.Tensor, step: torch.Tensor, position: int | None = None) -> torch.Tensor:
+        """One loop: the k blocks, conditioned on where the loop is (t) and how far it goes (step)."""
+        c = self.time_embedding(t) + self.step_embedding(step)
+        if self.conditions_input:
+            x = x + c
+        if position is not None:
             for block in self.blocks:
                 block.set_loop(position)
-            for block in self._block_calls or self.blocks:
-                x = block(x, c)
-            t = t + step
+        for block in self._block_calls or self.blocks:
+            x = block(x, c)
+        return x
+
+    def _output(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         hidden = self.ln_final(x)
         return self.lm_head(hidden), hidden
 
