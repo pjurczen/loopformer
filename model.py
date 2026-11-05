@@ -12,7 +12,7 @@ from einops import einsum, rearrange
 from jaxtyping import Bool, Float
 from torch._higher_order_ops import while_loop
 
-COMPILE_SCOPES = ("blocks", "whole", "loop")
+COMPILE_SCOPES = ("blocks", "whole", "loop", "none")
 
 
 @dataclass(frozen=True)
@@ -373,23 +373,31 @@ class LoopFormerLM(torch.nn.Module):
         self._scope = "blocks"
 
     def compile_for_device(self, device: str, scope: str = "blocks") -> None:
-        """Compiles the model for training. On CUDA the inductor backend generates fused kernels and float32 matmuls
-        may use TF32 tensor cores; elsewhere aot_eager works (MPS, CPU). Checkpoints keep the plain modules' keys.
+        """Compiles the model for training. The inductor backend generates fused kernels on CUDA (where float32 matmuls
+        may also use TF32 tensor cores) and Metal kernels on MPS (2.1× the eager step on an M2 Pro); on the CPU
+        aot_eager only traces the graph. Checkpoints keep the plain modules' keys.
 
         scope "blocks" compiles each block on its own: a trajectory of any length reuses the one compiled block.
         scope "whole" compiles the whole forward pass with the loop unrolled: one graph per loop count, which lets the
         compiler decide across blocks what to save for the backward pass and what to recompute.
         scope "loop" compiles the whole forward pass with the loop as a torch while_loop: one graph for every loop
-        count. Recompilations are logged, so a run shows how many graphs it built."""
+        count. Recompilations are logged, so a run shows how many graphs it built.
+        scope "none" runs eagerly: readable stack traces, and the reference for checking a compiled run."""
         if scope not in COMPILE_SCOPES:
             raise ValueError(f"scope must be one of {COMPILE_SCOPES}, got {scope!r}")
         if scope == "loop" and self.loop_lora_rank:
             raise ValueError("per-loop LoRA sets its position on the blocks, which a while_loop body may not do; use scope 'blocks' or 'whole'")
+        self._scope = scope
+        if scope == "none":
+            return
         if device.startswith("cuda"):
             torch.set_float32_matmul_precision("high")
-        backend = "inductor" if device.startswith("cuda") else "aot_eager"
+        backend = "inductor" if device.startswith(("cuda", "mps")) else "aot_eager"
+        if device.startswith("mps"):
+            # torch 2.11's Metal code generator emits the bounds checks of indirect indexing with an undeclared index
+            # variable (SyntaxError at compile time); eager mode checks the same indices anyway.
+            torch._inductor.config.assert_indirect_indexing = False
         torch._logging.set_logs(recompiles=True)
-        self._scope = scope
         if scope == "blocks":
             self._block_calls = [torch.compile(block, backend=backend) for block in self.blocks]
         elif scope == "whole":

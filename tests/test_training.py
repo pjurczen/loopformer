@@ -27,8 +27,8 @@ def loss_on_the_sample(run_dir, sample: np.ndarray, loops: int) -> float:
     return torch.nn.functional.cross_entropy(logits[0], targets).item()
 
 
-@pytest.mark.parametrize("scope", ["whole", "loop"])
-def test_training_with_the_whole_model_compiled_memorizes_the_sample_too(tmp_path, scope):
+@pytest.mark.parametrize("scope", ["whole", "loop", "none"])
+def test_training_with_the_other_compile_scopes_memorizes_the_sample_too(tmp_path, scope):
     sample = one_sample_dataset(tmp_path / "train.npy")
     args = parse_args([*overfit_args(tmp_path, scope), "--compile", scope])
 

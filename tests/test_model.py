@@ -22,6 +22,24 @@ def nonzero_gradient(parameters) -> bool:
     return any(p.grad is not None and p.grad.abs().sum() > 0 for p in parameters)
 
 
+@pytest.mark.skipif(not torch.backends.mps.is_available(), reason="needs an Apple GPU")
+def test_on_the_apple_gpu_the_compiled_model_gives_the_eager_model_s_loss_and_gradients():
+    tokens = random_tokens().to("mps")
+    eager = after_training_steps(LoopFormerLM(TINY_CONFIG, device="mps"), tokens)
+    compiled = LoopFormerLM(TINY_CONFIG, device="mps")
+    compiled.load_state_dict(eager.state_dict())
+    compiled.compile_for_device("mps", scope="whole")
+    schedule = long_trajectory(LOOP_MAX)
+
+    eager_loss = next_token_loss(eager, tokens, schedule)
+    eager_loss.backward()
+    compiled_loss = next_token_loss(compiled, tokens, schedule)
+    compiled_loss.backward()
+
+    torch.testing.assert_close(compiled_loss, eager_loss, atol=1e-3, rtol=1e-3)
+    torch.testing.assert_close(compiled.blocks[0].ffn.w1.weight.grad, eager.blocks[0].ffn.w1.weight.grad, atol=1e-3, rtol=1e-2)
+
+
 @pytest.mark.parametrize("variant", VARIANTS)
 @pytest.mark.parametrize("loops", [1, 2])
 def test_a_changed_token_leaves_the_logits_before_it_unchanged(variant, loops):
