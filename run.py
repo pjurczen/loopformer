@@ -70,6 +70,8 @@ class RunConfig(BaseModel):
     bf16: bool
     compile: str = "blocks"  # older runs' config.json predates this field; they compiled per block
     memory_snapshot_step: int | None = None
+    seed: int | None = None  # None: the weights, batches and short trajectories were random
+    final_val_batches: int | None = None  # None: the final validation covered the whole validation set
     git_commit: str | None  # code version the run was trained with; "-dirty" means uncommitted changes
     time_budget_minutes: float | None  # with a budget, training ended on time rather than at iter
     time_reserve_minutes: float

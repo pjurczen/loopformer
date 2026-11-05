@@ -58,8 +58,16 @@ def one_sample_dataset(path, seed: int = 0) -> np.ndarray:
     return ids
 
 
+def random_dataset(path, windows: int, seed: int = 0) -> np.ndarray:
+    """A dataset of `windows` non-overlapping context windows of random tokens."""
+    rng = np.random.default_rng(seed)
+    ids = rng.integers(0, VOCAB_SIZE, size=windows * CONTEXT_LENGTH + 1, dtype=np.uint16)
+    np.save(path, ids)
+    return ids
+
+
 def tokenizer_dir_for(vocab_size: int, path) -> str:
-    os.makedirs(path)
+    os.makedirs(path, exist_ok=True)  # several runs may share one root
     with open(os.path.join(path, "tokenizer_config.json"), "w") as f:
         json.dump({"vocab_size": vocab_size, "special_tokens": ["<|endoftext|>"]}, f)
     return str(path)

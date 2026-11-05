@@ -4,9 +4,15 @@ import numpy.typing as npt
 import torch
 from einops import rearrange
 
+_generator = np.random.default_rng()  # the training batches' window starts; seed_batches makes them reproducible
+
+
+def seed_batches(seed: int) -> None:
+    _generator.bit_generator.state = np.random.PCG64(seed).state
+
 
 def get_random_indices(dataset: npt.NDArray, batch_size: int, context_length: int):
-    return np.random.default_rng().integers(0, dataset.size - context_length, size=batch_size)
+    return _generator.integers(0, dataset.size - context_length, size=batch_size)
 
 
 def get_nonoverlapping_indices(dataset: npt.NDArray, context_length: int, limit: int | None = None):

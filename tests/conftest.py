@@ -14,6 +14,6 @@ def overfit_run(tmp_path_factory):
     sample = one_sample_dataset(root / "train.npy")
     args = parse_args(overfit_args(root, OVERFIT_RUN_NAME))
 
-    training(args)
+    summary = training(args)
 
-    return {"sample": sample, "run_dir": root / "runs" / OVERFIT_RUN_NAME, "args": args, "steps": OVERFIT_STEPS}
+    return {"sample": sample, "run_dir": root / "runs" / OVERFIT_RUN_NAME, "args": args, "steps": OVERFIT_STEPS, "summary": summary}
