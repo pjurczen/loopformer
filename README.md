@@ -115,7 +115,22 @@ The LoopFormer block peaked at 46 GB at batch 64 against 37 GB for a plain block
 
 The modulation is 1.2 GB. The stored attention matrices are 20 GB, 45% of the peak, and half of that is float32 because autocast runs the hand-written softmax's `exp` and `sum` in float32. The loss is another 10 GB; the "no float32 copy of the logits" in the training step avoided one copy, and autocast makes two more inside `exp`.
 
-The same snapshot on the plain 12-layer model (same batch, same step; peak 36.1 GB) explains the gap. Every row matches within a gigabyte except one: the float32 softmax output. The plain model, compiled as one graph, keeps a single one (0.8 GB) and recomputes the others during backward from the bf16 scores; the LoopFormer, compiled block by block, keeps all twelve (9.7 GB). The 9 GB between the two models is a compile-granularity effect, not the architecture. The levers are therefore implementation: a whole-model compile for the LoopFormer (one graph per loop count), a fused attention kernel (which the plain model would gain just as much from), a cross-entropy that does not materialize float32 copies of the logits, and a bf16 softmax.
+The same snapshot on the plain 12-layer model (same batch, same step; peak 36.1 GB) explains the gap. Every row matches within a gigabyte except one: the float32 softmax output. The plain model, compiled as one graph, keeps a single one (0.8 GB) and recomputes the others during backward from the bf16 scores; the LoopFormer, compiled block by block, keeps all twelve (9.7 GB). The 9 GB between the two models is a compile-granularity effect, not the architecture.
+
+### Compile scope: the same model, three ways to compile it
+
+`train.py --compile` picks how `torch.compile` sees the model. The schedule enters the compiled forward as a tensor, so its values are graph inputs rather than constants (with a Python list, every distinct schedule would be a new graph, which is why the reference repository trains without compilation at all). Same 3×4 model, batch 64, A100-80GB, memory snapshot at step 150:
+
+| `--compile` | What is compiled | Peak memory | ms per step | Graphs built |
+|---|---|---|---|---|
+| `blocks` (all runs above) | each block on its own, called once per loop | 46.0 GB | 417 | one per block |
+| `whole` | the whole forward with the loop unrolled | **37.2 GB** | ~380 | one per loop count (4), plus 2 for validation shapes |
+| `loop` | the whole forward with the loop as a `torch.while_loop`, the loop count a tensor | **16.7 GB** | 488 | 1, plus 2 for validation shapes |
+| plain 12-layer, for reference | the whole model | 37.1 GB | 302 | 1 |
+
+- **`whole` lands on the plain model's number**, and its snapshot shows the plain model's breakdown: the float32 softmax outputs are gone, recomputed in backward. It is also no slower than `blocks`. The compile cost is about 80 s for the first graph and 15 s for each shorter loop count.
+- **`loop` cuts the peak to a third.** `while_loop`'s backward keeps only the carried state of each iteration (0.5 GB) and recomputes the loop body, which is activation checkpointing per loop for free. The price is the recomputed forward, about 15% per step. One graph serves every loop count. Per-loop LoRA is not supported in this scope, since it sets the loop position on the modules, which a `while_loop` body may not do.
+- For the B200 this means batch 256 fits with `whole` (about 145 GB, like the plain model) and batch 512 would fit with `loop`.
 
 ### Phase 2: 45 minutes on a B200
 
