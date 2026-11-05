@@ -41,6 +41,10 @@ uv run modal volume get cs336-data runs/<run_name> runs/
 
 The training data and the tokenizer are those of the assignment, `data/owt-32k/*.npy` and `tokenizers/owt-32k/`, on the volume.
 
+### Autoresearch on the Mac
+
+`autoresearch.md` is the program for an agent that tests the ideas of `ideas.md` on its own, after Karpathy's autoresearch: one change, one 10-minute run on the Mac's GPU, one number, keep or `git reset`, all night. `configs/mps-10min.sh <run_name>` is the fixed experiment it runs (TinyStories, 4 blocks × 2 loops at d_model 384, inductor-compiled on MPS at ~12K tokens/s), and `CLAUDE.md` in this folder gives the agent the program and the permissions the course policy at the repository root withholds. Start a fresh session inside `loopformer/` and say: "Read autoresearch.md and set up a new experiment run; after setup, start the loop."
+
 ## Results
 
 All runs use OpenWebText with the 32K-vocabulary tokenizer, context 512, d_model 768, 12 heads, d_ff 2048, Muon for the block matrices and AdamW for the rest, bf16, warmup 120 steps, weight decay 0.1. The loss is the cross-entropy in nats per token on the whole validation set (66M tokens), measured at the full route of L loops unless a loop count is given.

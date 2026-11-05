@@ -1,0 +1,4 @@
+# the autoresearch loop's log and results stay out of git (see autoresearch.md)
+results.tsv
+run.log
+*.log
