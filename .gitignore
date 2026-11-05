@@ -6,10 +6,10 @@ __pycache__/
 .pytest_cache/
 .DS_Store
 
-# the token arrays, the tokenizers and the run folders live outside git (links or copies; see README.md)
-data/
-tokenizers/
-runs/
+# the token arrays, the tokenizers and the run folders live outside git as links or copies (see README.md); no trailing slash, so links match too
+data
+tokenizers
+runs
 
 # the autoresearch loop's log and results (see autoresearch.md)
 results.tsv
