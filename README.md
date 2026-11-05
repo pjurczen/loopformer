@@ -31,13 +31,13 @@ Three changes to how the model is trained, none to what it computes; each is mea
   its final hidden state is detached as the consistency target, then the short route runs. The gradient of a sum is the sum of the gradients, so the update is
   the same, at about half the peak memory.
 - **The whole forward compiles, one graph per loop count.** The reference repository trains without `torch.compile`, because a schedule given as a Python
-  list makes every schedule a new graph. Here the schedule is a tensor input: `--compile whole` lands on the plain model's memory (37 GB against 46 GB at batch
-  64), and `--compile loop` puts the loop into a `torch.while_loop`, one graph for every loop count and a third of the peak memory at 15% more time per step
-  ([comparison](docs/results.md#compile-scope-the-same-model-three-ways-to-compile-it)).
-- **Gates alone condition the block.** adaLN-Zero's (1 + γ) scales do no measurable work: `--conditioning gate` keeps the gates and drops the scales, matches
-  the full modulation within noise at every loop count and halves the gradient bursts of early warmup
-  ([ablations](docs/results.md#ablations-lighter-ways-to-condition-the-shared-block)). The full modulation stays the default, so the results compare with the
-  paper.
+  list makes every schedule a new graph. Here the schedule is a tensor input, and compiling the whole forward lands on the plain model's memory (37 GB against
+  46 GB at batch 64 with each block compiled on its own). A `torch.while_loop` version, one graph for every loop count at a third of the peak memory and 15%
+  more time per step, was measured and then removed ([comparison](docs/results.md#compile-scope-the-same-model-three-ways-to-compile-it)).
+- **Gates alone condition the block.** adaLN-Zero's (1 + γ) scales do no measurable work: a block with the gates and without the scales matches the full
+  modulation within noise at every loop count and halves the gradient bursts of early warmup
+  ([ablations](docs/results.md#ablations-lighter-ways-to-condition-the-shared-block)). That block is the model here; the full modulation lives on in the
+  result tables.
 
 ## Data
 

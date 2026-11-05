@@ -1,11 +1,8 @@
-from dataclasses import replace
-
 import pytest
 import torch
 from support import (
     LOOP_MAX,
     TINY_CONFIG,
-    VARIANTS,
     VOCAB_SIZE,
     after_training_steps,
     next_token_loss,
@@ -28,7 +25,7 @@ def test_on_the_apple_gpu_the_compiled_model_gives_the_eager_model_s_loss_and_gr
     eager = after_training_steps(LoopFormerLM(TINY_CONFIG, device="mps"), tokens)
     compiled = LoopFormerLM(TINY_CONFIG, device="mps")
     compiled.load_state_dict(eager.state_dict())
-    compiled.compile_for_device("mps", scope="whole")
+    compiled.compile_for_device("mps")
     schedule = long_trajectory(LOOP_MAX)
 
     eager_loss = next_token_loss(eager, tokens, schedule)
@@ -40,10 +37,9 @@ def test_on_the_apple_gpu_the_compiled_model_gives_the_eager_model_s_loss_and_gr
     torch.testing.assert_close(compiled.blocks[0].ffn.w1.weight.grad, eager.blocks[0].ffn.w1.weight.grad, atol=1e-3, rtol=1e-2)
 
 
-@pytest.mark.parametrize("variant", VARIANTS)
 @pytest.mark.parametrize("loops", [1, 2])
-def test_a_changed_token_leaves_the_logits_before_it_unchanged(variant, loops):
-    model = after_training_steps(tiny_model(variant=variant), random_tokens())
+def test_a_changed_token_leaves_the_logits_before_it_unchanged(loops):
+    model = after_training_steps(tiny_model(), random_tokens())
     tokens = random_tokens(seed=1)
     changed_position = 9
     changed_tokens = tokens.clone()
@@ -70,24 +66,14 @@ def test_at_initialization_the_gradient_reaches_only_the_modulators_embeddings_a
     assert nonzero_gradient(model.ln_final.parameters())
 
 
-def test_a_fresh_gate_model_passes_its_input_through_so_every_route_gives_the_same_logits():
-    model = tiny_model(variant="gate")
+def test_a_fresh_model_passes_its_input_through_so_every_route_gives_the_same_logits():
+    model = tiny_model()
     tokens = random_tokens()
 
     one_loop, _ = model(tokens, evaluation_schedule(LOOP_MAX, 1))
     full_route, _ = model(tokens, long_trajectory(LOOP_MAX))
 
     torch.testing.assert_close(one_loop, full_route)
-
-
-def test_a_fresh_additive_model_ignores_the_timing_of_its_loops():
-    model = LoopFormerLM(replace(TINY_CONFIG, loop_max=4, conditioning="additive"))
-    tokens = random_tokens()
-
-    coarse_first, _ = model(tokens, [0.5, 0.25, 0.25])
-    fine_first, _ = model(tokens, [0.25, 0.25, 0.5])
-
-    torch.testing.assert_close(coarse_first, fine_first)
 
 
 def test_muon_gets_the_block_matrices_and_nothing_from_outside_the_blocks():
@@ -105,19 +91,8 @@ def test_muon_gets_the_block_matrices_and_nothing_from_outside_the_blocks():
     assert all(id(p) not in muon for p in model.time_embedding.parameters())
 
 
-def test_lora_factors_stay_out_of_muon():
-    model = tiny_model(variant="additive-lora")
-
-    muon = {id(p) for p in model.muon_parameters()}
-    lora = [p for name, p in model.named_parameters() if "lora" in name]
-
-    assert lora
-    assert all(id(p) not in muon for p in lora)
-
-
-@pytest.mark.parametrize("variant", VARIANTS)
-def test_after_a_few_steps_every_parameter_receives_gradient(variant):
-    model = after_training_steps(tiny_model(variant=variant), random_tokens())
+def test_after_a_few_steps_every_parameter_receives_gradient():
+    model = after_training_steps(tiny_model(), random_tokens())
 
     next_token_loss(model, random_tokens(), long_trajectory(LOOP_MAX)).backward()
 
@@ -125,11 +100,10 @@ def test_after_a_few_steps_every_parameter_receives_gradient(variant):
         assert nonzero_gradient([parameter]), name
 
 
-@pytest.mark.parametrize("variant", VARIANTS)
 @pytest.mark.parametrize("loops", [1, 2])
-def test_a_saved_and_reloaded_model_gives_identical_logits(tmp_path, variant, loops):
-    trained = after_training_steps(tiny_model(seed=0, variant=variant), random_tokens())
-    fresh = tiny_model(seed=1, variant=variant)
+def test_a_saved_and_reloaded_model_gives_identical_logits(tmp_path, loops):
+    trained = after_training_steps(tiny_model(seed=0), random_tokens())
+    fresh = tiny_model(seed=1)
     tokens = random_tokens(seed=2)
     schedule = evaluation_schedule(LOOP_MAX, loops)
     path = tmp_path / "ckpt.pt"

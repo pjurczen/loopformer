@@ -4,7 +4,7 @@
 
 | File                                                   | Job                                                                                                     |
 |--------------------------------------------------------|---------------------------------------------------------------------------------------------------------|
-| `model.py`                                             | the copied components, the conditioning, the LoopFormer block, `LoopFormerLM`                           |
+| `model.py`                                             | the copied components, the conditioning, the gated LoopFormer block, `LoopFormerLM`                     |
 | `trajectory.py`                                        | the long route, the sampler for short routes, the evaluation schedule for a budget                      |
 | `train.py`                                             | the training loop: two-route loss, wall-clock budget, validation, checkpoints, metrics, wandb           |
 | `evaluate.py`                                          | the validation loss along a schedule, and a run's loss at every loop count (`budget_eval.json`)         |
@@ -49,18 +49,18 @@ The corpora and tokenizers of the results, and the commands that produced them, 
 `uv run train.py --help` lists them all; these shape an experiment:
 
 - `--loop_blocks k --loop_max L`: k unique blocks, L loops on the long route.
-- `--conditioning adaln|gate|additive`: how a block learns its loop position: scales and gates (the paper), gates only, or the (t, Δt) vector added to the
-  hidden state at each loop start. `--loop_lora_rank r` adds per-loop low-rank deltas on the shared matrices (0 = off).
 - `--shortcut_weight`, `--consistency_weight`: the two 0.1 of the loss.
-- `--compile blocks|whole|loop|none`: how `torch.compile` sees the model (see the compile-scope comparison in [results.md](results.md)); `whole` is the
-  default, `none` runs eagerly.
+- The optimizer is fixed: Muon for the 2-D matrices inside the blocks, AdamW for the rest; `--optimizer_lr_max`, `--optimizer_lr_min`,
+  `--optimizer_warmup_iters`, `--optimizer_weight_decay`, `--optimizer_beta2` set both.
+- `--no_compile`: run eagerly instead of compiling the whole forward pass (see the compile-scope comparison in [results.md](results.md)): readable stack
+  traces, and the reference for checking a compiled run.
 - `--time_budget_minutes M --time_reserve_minutes R --optimizer_warmup_iters W`: train for M − R minutes of training time (the first 10 steps, which compile
   the graphs, are not counted) with the cosine following that clock, and keep R minutes for the final validation. Without a budget, `--iter` steps and a
   step-based cosine.
 - `--seed`: the weights, the batches and the short trajectories (MPS stays nondeterministic even so).
 - `--final_val_batches N`: the final validation scores the first N batches instead of the whole set. `--checkpoints_iter 0`: no checkpoints.
 - `--memory_snapshot_step N`: record every allocation of step N into the run folder (CUDA); `uv run profiling.py <pickle>` summarizes it.
-- `--bf16`, `--optimizer_muon`, `--wandb_project`: precision, the optimizer split, the live dashboard.
+- `--bf16`, `--wandb_project`: precision, the live dashboard.
 
 A run writes `runs/<run_name>/config.json`, `metrics.jsonl` and `checkpoints/`, and ends with a summary block (`val_loss:`, `val_loss_1loop:`, `steps:`,
 `tok_per_s:`, `peak_memory_gb:`, …) that the autoresearch loop greps.

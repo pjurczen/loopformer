@@ -22,7 +22,7 @@ import wandb
 from checkpoint import load_checkpoint, save_checkpoint
 from data import cross_entropy, get_batch, get_nonoverlapping_indices, get_random_indices, seed_batches
 from evaluate import validation_loss
-from model import COMPILE_SCOPES, CONDITIONINGS, LoopFormerLM
+from model import LoopFormerLM
 from optim import AdamWOptimizer, MuonOptimizer, cosine_lr_schedule, cosine_lr_schedule_by_time, gradient_clipping
 from profiling import dump_and_summarize, start_recording
 from run import CHECKPOINTS_DIR, CONFIG_FILE, METRICS_FILE, LossConfig, RunConfig
@@ -55,11 +55,12 @@ def training(args: argparse.Namespace) -> dict:
     wandb_run = wandb.init(project=args.wandb_project, name=args.run_name, config=vars(args)) if args.wandb_project else None
 
     model = LoopFormerLM(run.architecture(), device=args.device, dtype=torch.float32)
-    model.compile_for_device(args.device, scope=args.compile)
+    if not args.no_compile:
+        model.compile_for_device(args.device)
     loss_config = run.loss()
 
-    # With --optimizer_muon, the 2-D matrices inside the blocks go to Muon; everything else stays on AdamW.
-    muon_params = model.muon_parameters() if args.optimizer_muon else []
+    # Muon updates the 2-D matrices inside the blocks; AdamW everything else (embeddings, conditioning MLPs, norms, biases).
+    muon_params = model.muon_parameters()
     muon_ids = {id(p) for p in muon_params}
     adamw: torch.optim.Optimizer = AdamWOptimizer(
         params=[p for p in model.parameters() if id(p) not in muon_ids],
@@ -68,12 +69,8 @@ def training(args: argparse.Namespace) -> dict:
         betas=(args.optimizer_beta1, args.optimizer_beta2),
         eps=args.optimizer_eps,
     )
-    muon: torch.optim.Optimizer | None = MuonOptimizer(
-        params=muon_params,
-        lr=args.optimizer_lr_min,
-        weight_decay=args.optimizer_weight_decay,
-    ) if args.optimizer_muon else None
-    optimizers: list[torch.optim.Optimizer] = [adamw] if muon is None else [adamw, muon]
+    muon: torch.optim.Optimizer = MuonOptimizer(params=muon_params, lr=args.optimizer_lr_min, weight_decay=args.optimizer_weight_decay)
+    optimizers: list[torch.optim.Optimizer] = [adamw, muon]
 
     elapsed_time = None
     if args.checkpoint_src:
@@ -279,12 +276,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     arg_parser.add_argument("--optimizer_beta1", type=float, default=0.9)
     arg_parser.add_argument("--optimizer_beta2", type=float, default=0.999)
     arg_parser.add_argument("--optimizer_eps", type=float, default=1e-8)
-    arg_parser.add_argument("--optimizer_muon", action="store_true", help="Muon for the 2D matrices inside the blocks, AdamW for the rest")
     arg_parser.add_argument("--loop_blocks", type=int, required=True, help="k: the number of unique transformer blocks")
     arg_parser.add_argument("--loop_max", type=int, required=True, help="L: the number of loops of the long trajectory")
-    arg_parser.add_argument("--conditioning", choices=CONDITIONINGS, default="adaln",
-                            help="how a block learns its loop position: adaln (scales + gates), gate, or an additive embedding")
-    arg_parser.add_argument("--loop_lora_rank", type=int, default=0, help="rank of per-loop low-rank deltas on the shared matrices; 0 turns them off")
     arg_parser.add_argument("--shortcut_weight", type=float, default=0.1, help="weight of the short trajectory's cross-entropy")
     arg_parser.add_argument("--consistency_weight", type=float, default=0.1, help="weight of the MSE between the short and long hidden states")
     arg_parser.add_argument("--model_context_length", type=int, default=512)
@@ -313,10 +306,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     arg_parser.add_argument("--checkpoint_src", type=str, default=None)
     arg_parser.add_argument("--wandb_project", type=str, default=None)
     arg_parser.add_argument("--bf16", action="store_true")
-    arg_parser.add_argument("--compile", choices=COMPILE_SCOPES, default="whole",
-                            help="torch.compile the whole forward pass unrolled (one graph per loop count; the plain model's memory), "
-                                 "each block on its own (9 GB more at batch 64), the whole pass with a while_loop (a third of the memory, "
-                                 "15%% slower), or none: eager, for debugging and as the reference for a compiled run")
+    arg_parser.add_argument("--no_compile", action="store_true",
+                            help="run the forward pass eagerly instead of torch.compile: readable stack traces, and the reference for checking a compiled run")
     arg_parser.add_argument("--memory_snapshot_step", type=int, default=None,
                             help="record every allocation of this training step and write memory_snapshot.pickle into the run folder (CUDA only)")
     arg_parser.add_argument("--time_budget_minutes", type=float, default=None,

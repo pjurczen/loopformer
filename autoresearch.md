@@ -12,7 +12,7 @@ To set up a new experiment, work with the user to:
    - `README.md` — repository context; `docs/results.md` — what was measured so far.
    - `ideas.md` — the ranked ideas to try, with their sources.
    - `model.py`, `trajectory.py`, `train.py` — the files you modify: model architecture, trajectories, training step.
-   - `configs/mps-10min.sh` — the fixed experiment: the shape, the budget, the evaluation. You modify only its optimizer variables and `EXPERIMENT_FLAGS`.
+   - `configs/mps-10min.sh` — the fixed experiment: the shape, the budget, the evaluation. You modify only its optimizer variables.
    - `data.py`, `evaluate.py`, `tokenizer.py`, `optim.py`, `checkpoint.py`, `run.py` — fixed. Do not modify.
 4. **Verify data exists**: Check that `data/tinystories-10k/train_ids.npy`, `data/tinystories-10k/valid_ids.npy` and `tokenizers/tinystories-10k/tokenizer_config.json` exist. If not, tell the human (they are links or copies, see README.md).
 5. **Verify the machine**: The Mac has 16 GB shared by everything. Ask the human to close memory-heavy applications and to run `caffeinate -i` in a second terminal so the Mac does not sleep.
@@ -26,7 +26,7 @@ Once you get confirmation, kick off the experimentation.
 Each experiment runs on the Mac's GPU. The training script runs for a **fixed time budget of 10 minutes** (wall clock training time, excluding startup/compilation). You launch it simply as: `configs/mps-10min.sh <run_name>`.
 
 **What you CAN do:**
-- Modify `model.py`, `trajectory.py` and `training_step` in `train.py` — the architecture, the conditioning, the routes, the loss terms. A new option gets a flag with a default equal to today's behaviour, and the flag goes into `EXPERIMENT_FLAGS` in `configs/mps-10min.sh`.
+- Modify `model.py`, `trajectory.py` and `training_step` in `train.py` — the architecture, the conditioning, the routes, the loss terms. Change the code directly: a kept change is the new code, a discarded one is reset away. Do not add flags or options to switch an experiment on and off.
 - Modify the optimizer variables at the top of `configs/mps-10min.sh` (`LR_MAX`, `LR_MIN`, `WARMUP`, `WEIGHT_DECAY`, `BETA2`).
 - Append to `ideas.md` the ideas you source overnight, with their arXiv ids (see "Sourcing new ideas").
 

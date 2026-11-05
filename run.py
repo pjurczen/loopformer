@@ -37,11 +37,8 @@ class RunConfig(BaseModel):
     optimizer_beta1: float
     optimizer_beta2: float
     optimizer_eps: float
-    optimizer_muon: bool
     loop_blocks: int
     loop_max: int
-    conditioning: str = "adaln"  # older runs' config.json predates this field; they used adaln
-    loop_lora_rank: int = 0  # older runs' config.json predates this field; they had no LoRA
     shortcut_weight: float
     consistency_weight: float
     model_vocab_size: int
@@ -68,7 +65,7 @@ class RunConfig(BaseModel):
     checkpoint_src: str | None
     wandb_project: str | None
     bf16: bool
-    compile: str = "blocks"  # older runs' config.json predates this field; they compiled per block
+    no_compile: bool = False  # older runs' config.json has a "compile" scope instead; all of them compiled
     memory_snapshot_step: int | None = None
     seed: int | None = None  # None: the weights, batches and short trajectories were random
     final_val_batches: int | None = None  # None: the final validation covered the whole validation set
@@ -81,14 +78,11 @@ class RunConfig(BaseModel):
             vocab_size=self.model_vocab_size,
             context_length=self.model_context_length,
             loop_blocks=self.loop_blocks,
-            loop_max=self.loop_max,
             d_model=self.model_d_model,
             num_heads=self.model_num_heads,
             d_ff=self.model_d_ff,
             eps=self.model_eps,
             rope_theta=self.model_rope_theta,
-            conditioning=self.conditioning,
-            loop_lora_rank=self.loop_lora_rank,
         )
 
     def loss(self) -> LossConfig:

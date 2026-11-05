@@ -4,9 +4,7 @@ import torch
 from support import (
     CONTEXT_LENGTH,
     LOOP_MAX,
-    OVERFIT_VARIANT,
     TINY_CONFIG,
-    VARIANTS,
     VOCAB_SIZE,
     one_sample_dataset,
     overfit_args,
@@ -30,24 +28,13 @@ def loss_on_the_sample(run_dir, sample: np.ndarray, loops: int) -> float:
     return torch.nn.functional.cross_entropy(logits[0], targets).item()
 
 
-@pytest.mark.parametrize("scope", ["whole", "loop", "none"])
-def test_training_with_the_other_compile_scopes_memorizes_the_sample_too(tmp_path, scope):
+def test_training_without_compilation_memorizes_the_sample_too(tmp_path):
     sample = one_sample_dataset(tmp_path / "train.npy")
-    args = parse_args([*overfit_args(tmp_path, scope), "--compile", scope])
+    args = parse_args([*overfit_args(tmp_path, "eager"), "--no_compile"])
 
     training(args)
 
-    assert loss_on_the_sample(tmp_path / "runs" / scope, sample, loops=LOOP_MAX) < 0.05
-
-
-@pytest.mark.parametrize("variant", [v for v in VARIANTS if v != OVERFIT_VARIANT])  # the overfit_run fixture covers that one
-def test_each_conditioning_variant_trains_on_one_sample_to_near_zero_loss(tmp_path, variant):
-    sample = one_sample_dataset(tmp_path / "train.npy")
-    args = parse_args(overfit_args(tmp_path, variant, variant))
-
-    training(args)
-
-    assert loss_on_the_sample(tmp_path / "runs" / variant, sample, loops=LOOP_MAX) < 0.05
+    assert loss_on_the_sample(tmp_path / "runs" / "eager", sample, loops=LOOP_MAX) < 0.05
 
 
 def test_training_on_one_sample_drives_the_full_route_loss_to_zero(overfit_run):

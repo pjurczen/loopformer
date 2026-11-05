@@ -48,6 +48,9 @@ The per-loop evaluation of one run takes 10 to 12 minutes on the A100: the full 
 
 ## Ablations: lighter ways to condition the shared block
 
+*After this comparison the gate variant became the model and the adaLN, additive and LoRA variants were removed from the code (their runs' checkpoints load
+with the commit before the removal).*
+
 The LoopFormer block peaked at 46 GB at batch 64 against 37 GB for a plain block, which kept the B200 run from the plain model's batch 256. The adaLN
 modulation (the (1 + γ) scale after each norm and the gate α on each branch) looked like the cause, so three lighter conditionings ran on the 3×4 shape with the
 phase-1 flags, one change each against the phase-1 run (`--conditioning gate`, `--conditioning additive`, `--conditioning additive --loop_lora_rank 32`):
@@ -98,6 +101,8 @@ float32 softmax output. The plain model, compiled as one graph, keeps a single o
 LoopFormer, compiled block by block, keeps all twelve (9.7 GB). The 9 GB between the two models is a compile-granularity effect, not the architecture.
 
 ## Compile scope: the same model, three ways to compile it
+
+*After this comparison `whole` became the only compile mode (`--no_compile` runs eagerly); `blocks` and `loop` were removed from the code.*
 
 `train.py --compile` picks how `torch.compile` sees the model. The schedule enters the compiled forward as a tensor, so its values are graph inputs rather than
 constants (with a Python list, every distinct schedule would be a new graph, which is why the reference repository trains without compilation at all). Same 3×4
