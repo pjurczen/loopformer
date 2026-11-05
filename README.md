@@ -1,6 +1,6 @@
 # LoopFormer on OpenWebText
 
-An implementation of the LoopFormer ([Jeddi, Ciccone, Taati, 2026](https://arxiv.org/abs/2602.11451)): a decoder-only transformer with k unique blocks applied L times, each loop conditioned on its position in the journey, and trained so that fewer loops still give a useful answer. It is built from the components of my [CS336 assignment 1](../README.md) (the same attention with QK-norm, RoPE, SwiGLU, tied embeddings, Muon and AdamW), so its results compare directly with the plain transformer trained there. A curiosity project, not part of the assignment.
+An independent reimplementation of the LoopFormer ([Jeddi, Ciccone, Taati, 2026](https://arxiv.org/abs/2602.11451)): a decoder-only transformer with k unique blocks applied L times, each loop conditioned on its position in the journey, and trained so that fewer loops still give a useful answer. It is written from the paper, not from the authors' code, and built from the components of my [CS336 assignment 1](https://github.com/pjurczen/cs336-assignment1-basics) (the same attention with QK-norm, RoPE, SwiGLU, tied embeddings, Muon and AdamW), so its results compare directly with the plain transformer trained there. A curiosity project, not part of the assignment.
 
 ## What is different from a plain transformer
 
@@ -24,7 +24,7 @@ An implementation of the LoopFormer ([Jeddi, Ciccone, Taati, 2026](https://arxiv
 
 ## How to run
 
-Everything runs from inside this folder, with its own environment:
+Everything runs from the repository root, in the environment `uv` builds from `uv.lock`:
 
 ```sh
 uv run pytest                                           # behaviour tests on a tiny model, a few seconds on the CPU
@@ -39,11 +39,11 @@ The experiment's runs go to Modal (`modal_app.py`): `configs/smoke.sh` checks th
 uv run modal volume get cs336-data runs/<run_name> runs/
 ```
 
-The training data and the tokenizer are those of the assignment, `data/owt-32k/*.npy` and `tokenizers/owt-32k/`, on the volume.
+The training data and the tokenizers are not in the repository. They come from the assignment's BPE pipeline: `data/<name>/{train,valid}_ids.npy` (token ids as uint16) and `tokenizers/<name>/{vocab.json,merges.txt,tokenizer_config.json}`, for `owt-32k` (OpenWebText, 32K vocabulary) and `tinystories-10k`. Link or copy them into `data/` and `tokenizers/` (both ignored by git); the Modal runs read them from the volume.
 
 ### Autoresearch on the Mac
 
-`autoresearch.md` is the program for an agent that tests the ideas of `ideas.md` on its own, after Karpathy's autoresearch: one change, one 10-minute run on the Mac's GPU, one number, keep or `git reset`, all night. `configs/mps-10min.sh <run_name>` is the fixed experiment it runs (TinyStories, 4 blocks × 2 loops at d_model 384, inductor-compiled on MPS at ~12K tokens/s), and `CLAUDE.md` in this folder gives the agent the program and the permissions the course policy at the repository root withholds. Start a fresh session inside `loopformer/` and say: "Read autoresearch.md and set up a new experiment run; after setup, start the loop."
+`autoresearch.md` is the program for an agent that tests the ideas of `ideas.md` on its own, after [Karpathy's autoresearch](https://github.com/karpathy/autoresearch): one change, one 10-minute run on the Mac's GPU, one number, keep or `git reset`, all night. `configs/mps-10min.sh <run_name>` is the fixed experiment it runs (TinyStories, 4 blocks × 2 loops at d_model 384, inductor-compiled on MPS at ~12K tokens/s), and `CLAUDE.md` hands the agent the program. Start a fresh Claude Code session in the repository root and say: "Read autoresearch.md and set up a new experiment run; after setup, start the loop."
 
 ## Results
 

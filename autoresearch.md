@@ -12,14 +12,16 @@ are in `README.md`.
 Work with the user through these steps, then ask once for the go-ahead.
 
 1. **Branch.** Propose a tag from today's date (for example `nov5`). The branch `autoresearch/<tag>` must not exist
-   yet. `git checkout -b autoresearch/<tag>` from the `loopformer` branch, with a clean working tree.
+   yet. `git checkout -b autoresearch/<tag>` from `main`, with a clean working tree.
 2. **Read the in-scope files**, they are small: `autoresearch.md` (this), `ideas.md` (the ranked ideas, with sources),
    `README.md` (what was measured so far), `model.py`, `trajectory.py`, `train.py`, `configs/mps-10min.sh`.
-3. **Check the data**: `../data/tinystories-10k/train_ids.npy`, `../data/tinystories-10k/valid_ids.npy` and
-   `../tokenizers/tinystories-10k/tokenizer_config.json` exist. If not, stop and tell the user.
+3. **Check the data**: `data/tinystories-10k/train_ids.npy`, `data/tinystories-10k/valid_ids.npy` and
+   `tokenizers/tinystories-10k/tokenizer_config.json` exist (links or copies, see README.md). If not, stop and tell
+   the user.
 4. **Check the machine**: the Mac has 16 GB shared by everything. Ask the user to close memory-heavy applications and to
    run `caffeinate -i` in a second terminal so the Mac does not sleep.
-5. **results.tsv**: create it in `loopformer/` with the header row only (tab-separated). It is untracked (`.gitignore`).
+5. **results.tsv**: create it in the repository root with the header row only (tab-separated). It is untracked
+   (`.gitignore`).
 6. **The baseline, twice**: run the unchanged code with `--seed 1` and with `--seed 2` (two experiments, see "One
    experiment"). Their `val_loss` difference `s` is the seed noise; the decision threshold is `max(s, 0.01)`; `best` is
    their mean. Log both rows with status `keep` and descriptions `baseline seed 1` / `baseline seed 2`.
@@ -42,12 +44,12 @@ Work with the user through these steps, then ask once for the go-ahead.
 - The metric: `val_loss`, the cross-entropy in nats along the full route (2 loops) over the validation set's first 64
   batches. `val_loss_1loop` is the same windows along the one-loop route (the elastic-depth number); log it, do not
   optimize it.
-- No new dependencies. No changes outside `loopformer/`.
+- No new dependencies.
 
 ## One experiment
 
 1. Edit the code for one idea. One change per experiment, so the result has one cause.
-2. Fast check before spending 12 minutes: `env -u VIRTUAL_ENV uv run pytest tests/test_model.py -q -x` (about 20 s;
+2. Fast check before spending 12 minutes: `uv run pytest tests/test_model.py -q -x` (about 20 s;
    the Apple-GPU test in it compiles the tiny model with inductor, which catches most shape and codegen mistakes).
    Fix failures first. A test that no longer fits a changed behaviour may be changed with the behaviour, never deleted
    to make a run go.
@@ -103,15 +105,14 @@ morning. Out of ideas? Re-read `ideas.md` and the near-misses in `results.tsv`, 
 version, read the source paper's section named in `ideas.md`. The loop runs until the user interrupts it.
 
 After a context compaction this file comes back through `CLAUDE.md`; then re-read `results.tsv`,
-`git log --oneline loopformer..HEAD` and the summary of the last `run.log` before the next experiment. The state of
-the research is in those three places, never only in your memory.
+`git log --oneline main..HEAD` and the summary of the last `run.log` before the next experiment. The state of the
+research is in those three places, never only in your memory.
 
 ## Git hygiene
 
-Only `loopformer/` paths, named one by one. Never `git add -A` or `git add .` at the repository root (it holds
-`.DS_Store` files and the coursework), never `git clean` (it would delete `results.tsv` and `run.log`), never force-push,
-never touch the `loopformer` or `main` branches. `git reset --hard` resets the whole worktree: that is intended for a
-discard, and the reason nothing outside `loopformer/` may be edited.
+Only the files you changed, named one by one. Never `git add -A` or `git add .`, never `git clean` (it would delete
+`results.tsv`, `run.log` and the data links), never force-push, never touch `main`. `git reset --hard` resets the
+whole worktree: that is intended for a discard.
 
 ## In the morning
 

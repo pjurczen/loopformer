@@ -3,7 +3,7 @@
 # d_model 384, 10 minutes of training time, then the validation set's first 64 batches along the full route and the
 # one-loop route. The agent edits only the two blocks marked below; the shape, batch, context, dataset, budget and
 # evaluation are fixed, so every run is comparable with every other.
-#   configs/mps-10min.sh <run_name> [extra train.py flags]      (from loopformer/; extra flags come last and override)
+#   configs/mps-10min.sh <run_name> [extra train.py flags]      (extra flags come last and override)
 # The run ends with train.py's summary: grep -E "^(val_loss|val_loss_1loop|peak_memory_gb|tok_per_s):" run.log
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -26,10 +26,10 @@ export TORCHINDUCTOR_COMPILE_THREADS=1 # inductor's default 10 compile workers e
 timeout_cmd=$(command -v timeout || true) # coreutils' timeout (brew install coreutils): the hard stop at 25 minutes
 
 # shellcheck disable=SC2086  # EXPERIMENT_FLAGS is a list of flags
-exec ${timeout_cmd:+"$timeout_cmd" 1500} env -u VIRTUAL_ENV uv run train.py \
+exec ${timeout_cmd:+"$timeout_cmd" 1500} uv run train.py \
   --device mps --compile whole \
-  --train_data ../data/tinystories-10k/train_ids.npy --val_data ../data/tinystories-10k/valid_ids.npy \
-  --tokenizer_dir ../tokenizers/tinystories-10k \
+  --train_data data/tinystories-10k/train_ids.npy --val_data data/tinystories-10k/valid_ids.npy \
+  --tokenizer_dir tokenizers/tinystories-10k \
   --loop_blocks 4 --loop_max 2 --model_d_model 384 --model_num_heads 6 --model_d_ff 1024 --model_context_length 256 \
   --batch_size 32 --optimizer_muon \
   --optimizer_lr_max "$LR_MAX" --optimizer_lr_min "$LR_MIN" --optimizer_warmup_iters "$WARMUP" \

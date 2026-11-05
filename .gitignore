@@ -1,4 +1,17 @@
-# the autoresearch loop's log and results stay out of git (see autoresearch.md)
+# Python, uv, tools
+__pycache__/
+*.py[cod]
+.venv/
+.ruff_cache/
+.pytest_cache/
+.DS_Store
+
+# the token arrays, the tokenizers and the run folders live outside git (links or copies; see README.md)
+data/
+tokenizers/
+runs/
+
+# the autoresearch loop's log and results (see autoresearch.md)
 results.tsv
 run.log
 *.log
